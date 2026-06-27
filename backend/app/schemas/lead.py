@@ -1,8 +1,8 @@
 """
 外贸获客系统 - Pydantic 数据模式
 """
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
+from typing import Optional, List, Any
 from datetime import datetime
 from enum import Enum
 
@@ -78,6 +78,14 @@ class LeadBase(BaseModel):
     lead_score: float = 0.0
     source_url: Optional[str] = Field(None, max_length=500)
     original_data: Optional[str] = None  # JSON string
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_email_to_none(cls, v: Any) -> Any:
+        """将空字符串转为 None，兼容数据库中已存的空值"""
+        if v == "":
+            return None
+        return v
 
 
 class LeadCreate(LeadBase):

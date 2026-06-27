@@ -89,6 +89,9 @@ def _add_task(task_type: str, keyword: str, platform: str = None) -> dict:
     return task
 
 
+_NULLABLE_FIELDS = {"contact_name", "email", "phone", "website", "country", "state", "city", "address", "product_interest", "source_url", "original_data"}
+
+
 def _save_leads(leads_data: List[dict], source_id: int) -> int:
     """将采集结果保存到数据库，返回新增数量"""
     if not leads_data:
@@ -107,9 +110,17 @@ def _save_leads(leads_data: List[dict], source_id: int) -> int:
             if data.get("social_links"):
                 import json
                 social_json = json.dumps(data["social_links"], ensure_ascii=False)
-                existing = data.get("original_data", "") or ""
+                existing = data.get("original_data") or ""
                 data["original_data"] = (existing + f" | social: {social_json}").strip(" | ")
-            clean_data = {k: v for k, v in data.items() if k in _valid_fields}
+            # 空字符串转 None，避免 Pydantic EmailStr 等验证失败
+            clean_data = {}
+            for k, v in data.items():
+                if k not in _valid_fields:
+                    continue
+                if k in _NULLABLE_FIELDS and v == "":
+                    clean_data[k] = None
+                else:
+                    clean_data[k] = v
 
             if clean_data.get("email"):
                 exists = db.query(Lead).filter(Lead.email == clean_data["email"]).first()

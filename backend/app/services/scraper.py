@@ -73,7 +73,7 @@ _ACCEPT_LANGUAGES = [
 
 
 def _get_client(timeout: float = None) -> httpx.Client:
-    """创建带随机 UA 的 HTTP 客户端"""
+    """创建带随机 UA 的 HTTP 客户端（使用代理，如果配置了）"""
     if timeout is None:
         timeout = _REQUEST_TIMEOUT
     kwargs = {
@@ -98,8 +98,27 @@ def _get_client(timeout: float = None) -> httpx.Client:
     return httpx.Client(**kwargs)
 
 
+def _get_direct_client(timeout: float = None) -> httpx.Client:
+    """创建 HTTP 客户端（直连，不走代理，用于国内源）"""
+    if timeout is None:
+        timeout = _REQUEST_TIMEOUT
+    return httpx.Client(
+        headers={
+            "User-Agent": random.choice(_USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": random.choice(_ACCEPT_LANGUAGES),
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        },
+        timeout=timeout,
+        follow_redirects=True,
+    )
+
+
 def _fetch_with_retry(url: str, timeout: float = None) -> Tuple[Optional[str], int]:
-    """带重试的 HTTP 请求，返回 (响应文本, 状态码)"""
+    """带重试的 HTTP 请求（走代理，如果配置了），返回 (响应文本, 状态码)"""
     if timeout is None:
         timeout = _REQUEST_TIMEOUT
     last_error = None
@@ -108,7 +127,6 @@ def _fetch_with_retry(url: str, timeout: float = None) -> Tuple[Optional[str], i
             with _get_client(timeout) as client:
                 resp = client.get(url)
                 if resp.status_code == 429:
-                    # 被限流，等待更长时间
                     wait = _RETRY_BACKOFF * (2 ** attempt) + random.uniform(1, 3)
                     logger.warning(f"HTTP 429，等待 {wait:.1f}s 后重试...")
                     time.sleep(wait)
@@ -119,6 +137,34 @@ def _fetch_with_retry(url: str, timeout: float = None) -> Tuple[Optional[str], i
             last_error = "timeout"
         except Exception as e:
             logger.warning(f"请求失败 (attempt {attempt + 1}): {url[:80]} - {e}")
+            last_error = str(e)
+
+        if attempt < _RETRY_MAX:
+            time.sleep(_RETRY_BACKOFF * (attempt + 1))
+
+    return None, 0
+
+
+def _fetch_direct(url: str, timeout: float = None) -> Tuple[Optional[str], int]:
+    """直连 HTTP 请求（不走代理，用于国内源），返回 (响应文本, 状态码)"""
+    if timeout is None:
+        timeout = _REQUEST_TIMEOUT
+    last_error = None
+    for attempt in range(_RETRY_MAX + 1):
+        try:
+            with _get_direct_client(timeout) as client:
+                resp = client.get(url)
+                if resp.status_code == 429:
+                    wait = _RETRY_BACKOFF * (2 ** attempt) + random.uniform(1, 3)
+                    logger.warning(f"HTTP 429，等待 {wait:.1f}s 后重试...")
+                    time.sleep(wait)
+                    continue
+                return resp.text, resp.status_code
+        except httpx.TimeoutException:
+            logger.warning(f"直连超时 (attempt {attempt + 1}): {url[:80]}")
+            last_error = "timeout"
+        except Exception as e:
+            logger.warning(f"直连失败 (attempt {attempt + 1}): {url[:80]} - {e}")
             last_error = str(e)
 
         if attempt < _RETRY_MAX:
@@ -315,18 +361,18 @@ def _build_lead(
     """构建统一的线索数据字典"""
     return {
         "company_name": _clean_company_name(company_name),
-        "contact_name": "",
-        "email": email,
-        "phone": phone,
-        "website": website,
-        "country": country or "",
-        "city": city or "",
+        "contact_name": None,
+        "email": email or None,
+        "phone": phone or None,
+        "website": website or None,
+        "country": country or None,
+        "city": city or None,
         "industry": _guess_industry(keyword),
         "product_interest": keyword,
         "lead_score": round(random.uniform(50, 85), 1),
-        "source_url": source_url,
+        "source_url": source_url or None,
         "status": "new",
-        "original_data": snippet[:500] if snippet else "",
+        "original_data": snippet[:500] if snippet else None,
         "social_links": social or {},
     }
 
@@ -849,7 +895,7 @@ def search_baidu(keyword: str, max_results: int = 20) -> List[dict]:
             url = f"https://www.baidu.com/s?wd={q}&pn={page}&rn=10"
             logger.info(f"百度搜索: keyword={keyword}, pn={page}")
 
-            html, status = _fetch_with_retry(url)
+            html, status = _fetch_direct(url)
             if not html or status != 200:
                 continue
 
@@ -930,7 +976,7 @@ def search_1688(keyword: str, max_results: int = 20) -> List[dict]:
         url = f"https://s.1688.com/selloffer/offer_search.htm?keywords={q}&n=y"
         logger.info(f"1688 采集: {url}")
 
-        html, status = _fetch_with_retry(url)
+        html, status = _fetch_direct(url)
         if not html or status != 200:
             logger.warning(f"1688 返回 {status}")
             return leads
@@ -997,7 +1043,7 @@ def search_1688(keyword: str, max_results: int = 20) -> List[dict]:
 # ================================================================
 
 _CONNECTIVITY_TARGETS = {
-    # 国内源（无需代理，优先使用）
+    # 国内源（无需代理，直连）
     "baidu": "https://www.baidu.com",
     "1688": "https://www.1688.com",
     # 境外源（需要代理）
@@ -1008,18 +1054,22 @@ _CONNECTIVITY_TARGETS = {
     "yellow_pages": "https://www.yellowpages.com",
 }
 
+_DOMESTIC_DOMAINS = {"baidu.com", "1688.com", "s.1688.com"}
+
 
 def check_connectivity() -> Dict[str, dict]:
     """
     快速检查各采集源的网络连通性（4 秒超时，不重试）。
-
-    返回: { source_name: {"reachable": bool, "latency_ms": float, "error": str} }
+    国内源直连，境外源走代理（如果配置了）。
     """
     results = {}
     for name, url in _CONNECTIVITY_TARGETS.items():
         start = time.time()
+        # 国内源走直连，境外源走代理
+        is_domestic = any(d in url for d in _DOMESTIC_DOMAINS)
+        client_cls = _get_direct_client if is_domestic else _get_client
         try:
-            with _get_client(_QUICK_TIMEOUT) as client:
+            with client_cls(_QUICK_TIMEOUT) as client:
                 resp = client.get(url)
                 latency = (time.time() - start) * 1000
                 results[name] = {

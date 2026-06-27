@@ -38,6 +38,12 @@
         <el-table-column prop="company_name" label="公司名称" min-width="180" />
         <el-table-column prop="contact_name" label="联系人" width="100" />
         <el-table-column prop="email" label="邮箱" min-width="180" />
+        <el-table-column label="来源" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.source" size="small" type="info">{{ row.source.name }}</el-tag>
+            <span v-else style="color:#909399">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="country" label="国家" width="100" />
         <el-table-column prop="industry" label="行业" width="120" />
         <el-table-column prop="lead_score" label="评分" width="80" />
