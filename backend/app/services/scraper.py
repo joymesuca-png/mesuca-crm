@@ -834,10 +834,173 @@ def scrape_company_website(url: str) -> Dict[str, str]:
 
 
 # ================================================================
+#  国内数据源采集（无需代理，直接可用）
+# ================================================================
+
+def search_baidu(keyword: str, max_results: int = 20) -> List[dict]:
+    """
+    通过百度搜索采集企业信息（境内直连，无需代理）。
+    百度搜索英文关键词也能找到外贸相关企业。
+    """
+    leads = []
+    for page in range(0, min(max_results, 30), 10):
+        try:
+            q = quote_plus(keyword)
+            url = f"https://www.baidu.com/s?wd={q}&pn={page}&rn=10"
+            logger.info(f"百度搜索: keyword={keyword}, pn={page}")
+
+            html, status = _fetch_with_retry(url)
+            if not html or status != 200:
+                continue
+
+            soup = BeautifulSoup(html, "lxml")
+
+            for div in soup.select("div.result, div.c-container"):
+                try:
+                    title_el = div.select_one("h3 a, .t a")
+                    if not title_el:
+                        continue
+                    title = title_el.get_text(strip=True)
+
+                    # 百度搜索结果中的真实 URL 存储在 mu 属性或通过跳转链接
+                    link = ""
+                    mu = title_el.get("mu", "")
+                    if mu:
+                        link = mu
+                    else:
+                        link = title_el.get("href", "")
+
+                    snippet_el = div.select_one(".c-abstract, .c-span-last, .content-right_8Zs40")
+                    snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+                    domain = _extract_domain(link)
+                    if not domain:
+                        continue
+
+                    company = ""
+                    for sep in [" - ", " | ", " – ", " — ", "_"]:
+                        if sep in title:
+                            company = _clean_company_name(title.split(sep, 1)[0])
+                            break
+                    if not company:
+                        company = _clean_company_name(title)
+
+                    if not company or len(company) < 3:
+                        continue
+
+                    emails = _extract_emails(snippet, domain)
+                    phones = _extract_phones(snippet)
+
+                    leads.append(_build_lead(
+                        company_name=company,
+                        website=link,
+                        email=emails[0] if emails else "",
+                        phone=phones[0] if phones else "",
+                        country="China",
+                        keyword=keyword,
+                        source_url=url,
+                        snippet=snippet,
+                    ))
+
+                    if len(leads) >= max_results:
+                        break
+                except Exception as e:
+                    logger.debug(f"百度解析失败: {e}")
+                    continue
+
+            _sleep(0.5, 1.5)
+            if len(leads) >= max_results:
+                break
+        except Exception as e:
+            logger.error(f"百度搜索失败: {e}")
+            break
+
+    logger.info(f"百度搜索完成，采集 {len(leads)} 条线索")
+    return leads
+
+
+def search_1688(keyword: str, max_results: int = 20) -> List[dict]:
+    """
+    从 1688.com（阿里巴巴国内站）采集供应商信息。
+    境内直连，无需代理。
+    """
+    leads = []
+    try:
+        q = quote_plus(keyword)
+        url = f"https://s.1688.com/selloffer/offer_search.htm?keywords={q}&n=y"
+        logger.info(f"1688 采集: {url}")
+
+        html, status = _fetch_with_retry(url)
+        if not html or status != 200:
+            logger.warning(f"1688 返回 {status}")
+            return leads
+
+        soup = BeautifulSoup(html, "lxml")
+
+        # 1688 搜索结果选择器
+        selectors = [
+            ".sm-offer-item", ".offer-list-item", ".offer-item",
+            ".list-item", ".offer_grid_item", ".imgofferresult",
+        ]
+        items = []
+        for sel in selectors:
+            items = soup.select(sel)
+            if items:
+                break
+
+        for item in items[:max_results]:
+            try:
+                # 公司名
+                company_el = (
+                    item.select_one(".sm-company-name, .company-name, .supplier, .company") or
+                    item.select_one("[data-company-name]")
+                )
+                company = company_el.get_text(strip=True) if company_el else ""
+                if not company:
+                    company = company_el.get("title", "") if company_el else ""
+
+                # 产品标题
+                title_el = item.select_one(".sm-offer-title, .offer-title, .title, .product-title, a[title]")
+                title = title_el.get_text(strip=True) or title_el.get("title", "") if title_el else ""
+
+                # 链接
+                link_el = item.select_one("a[href*='offer'], a.sm-offer-title, a.offer-title")
+                link = link_el.get("href", "") if link_el else ""
+                if link and not link.startswith("http"):
+                    link = "https:" + link if link.startswith("//") else "https://detail.1688.com" + link
+
+                if not company or len(company) < 2:
+                    continue
+
+                leads.append(_build_lead(
+                    company_name=company,
+                    website=link,
+                    country="China",
+                    keyword=keyword,
+                    source_url=url,
+                    snippet=title,
+                ))
+            except Exception as e:
+                logger.debug(f"1688 解析失败: {e}")
+                continue
+
+            _sleep(0.5, 1.5)
+    except Exception as e:
+        logger.error(f"1688 采集失败: {e}")
+
+    logger.info(f"1688 采集完成，获取 {len(leads)} 条")
+    return leads
+
+
+# ================================================================
 #  网络连通性预检
 # ================================================================
 
 _CONNECTIVITY_TARGETS = {
+    # 国内源（无需代理，优先使用）
+    "baidu": "https://www.baidu.com",
+    "1688": "https://www.1688.com",
+    # 境外源（需要代理）
     "google": "https://www.google.com",
     "bing": "https://www.bing.com",
     "alibaba": "https://www.alibaba.com",
@@ -885,57 +1048,79 @@ def check_connectivity() -> Dict[str, dict]:
 
 def collect_search_engine(keyword: str, country: str = "", max_results: int = 20) -> List[dict]:
     """
-    搜索引擎采集入口：先检查连通性，跳过被墙的源。
+    搜索引擎采集入口：优先国内源（百度），再尝试境外源（Google/Bing）。
     """
     logger.info(f"搜索引擎采集: keyword={keyword}, country={country}")
 
     # 快速连通性检查
     connectivity = check_connectivity()
+    baidu_ok = connectivity.get("baidu", {}).get("reachable", False)
     google_ok = connectivity.get("google", {}).get("reachable", False)
     bing_ok = connectivity.get("bing", {}).get("reachable", False)
     yp_ok = connectivity.get("yellow_pages", {}).get("reachable", False)
 
-    if not google_ok and not bing_ok and not yp_ok:
-        logger.warning("所有搜索引擎均不可达，跳过采集")
+    if not baidu_ok and not google_ok and not bing_ok and not yp_ok:
+        logger.warning("所有搜索引擎均不可达")
         return []
 
-    # 1. 尝试 Google
+    # 1. 优先百度（国内直连，无需代理）
+    if baidu_ok:
+        leads = search_baidu(keyword, max_results)
+        if leads:
+            logger.info(f"百度搜索成功，获取 {len(leads)} 条")
+            return leads
+
+    # 2. 尝试 Google
     if google_ok:
         leads = search_google(keyword, country, max_results)
         if leads:
             return leads
         logger.info("Google 无结果，尝试 Bing...")
 
-    # 2. 降级到 Bing
+    # 3. 降级到 Bing
     if bing_ok:
         leads = search_bing(keyword, country, max_results)
         if leads:
             return leads
         logger.info("Bing 无结果，尝试 Yellow Pages...")
 
-    # 3. 降级到 Yellow Pages
+    # 4. 降级到 Yellow Pages
     if yp_ok:
         leads = search_yellow_pages(keyword, country, max_results)
         return leads
 
-    return leads
+    return []
 
 
 def collect_b2b(platform: str, keyword: str, max_results: int = 20) -> List[dict]:
-    """B2B 平台采集入口"""
+    """B2B 平台采集入口：优先 1688（国内），再试阿里巴巴国际站"""
+    # 如果平台是 alibaba，先检查 1688 是否可用
+    if platform.lower() == "alibaba":
+        connectivity = check_connectivity()
+        if connectivity.get("1688", {}).get("reachable", False):
+            logger.info("优先使用 1688.com（国内直连）")
+            leads = search_1688(keyword, max_results)
+            if leads:
+                return leads
+        # 1688 不行再试阿里巴巴国际站
+        if connectivity.get("alibaba", {}).get("reachable", False):
+            leads = search_alibaba(keyword, max_results)
+            return leads
+        return []
+
     scrapers = {
         "alibaba": search_alibaba,
+        "1688": search_1688,
         "globalsources": lambda k, m: [],
         "made-in-china": search_made_in_china,
         "tradekey": lambda k, m: [],
     }
 
-    # 连通性检查
     connectivity = check_connectivity()
-    reachable = connectivity.get(platform, connectivity.get(
+    reachable = connectivity.get(
         "alibaba" if platform == "globalsources" else platform,
         {}
-    )).get("reachable", False)
+    ).get("reachable", False)
 
     if not reachable:
         logger.warning(f"平台 {platform} 不可达，跳过采集")

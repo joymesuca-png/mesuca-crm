@@ -17,8 +17,7 @@
     >
       <template #default>
         <p style="margin:0;line-height:1.8">
-          系统仅采集真实数据，不自动生成模拟线索。
-          深度挖掘时自动限制单次 ≤ 10 条，普通采集单次 ≤ 30 条，以规避反爬机制。
+          系统优先使用国内采集源（百度搜索、1688.com），无需代理即可采集真实数据。
         </p>
       </template>
     </el-alert>
@@ -44,16 +43,16 @@
         <el-card shadow="hover" class="channel-card" @click="openSearchCapture">
           <div class="channel-icon"><el-icon :size="36"><Search /></el-icon></div>
           <h3>搜索引擎采集</h3>
-          <p>通过 Google 等搜索引擎按关键词挖掘潜在客户</p>
-          <el-tag type="info" size="small">Google · Bing · Yellow Pages</el-tag>
+          <p>通过百度、Google 等搜索引擎按关键词挖掘潜在客户</p>
+          <el-tag type="info" size="small">百度 · Google · Bing</el-tag>
         </el-card>
       </el-col>
       <el-col :span="12">
         <el-card shadow="hover" class="channel-card" @click="openB2BCapture">
           <div class="channel-icon"><el-icon :size="36"><Connection /></el-icon></div>
           <h3>B2B 平台采集</h3>
-          <p>从阿里巴巴国际站等 B2B 平台获取采购商信息</p>
-          <el-tag type="warning" size="small">Alibaba · Made-in-China</el-tag>
+          <p>从 1688、阿里巴巴国际站等 B2B 平台获取供应商信息</p>
+          <el-tag type="warning" size="small">1688 · Alibaba</el-tag>
         </el-card>
       </el-col>
     </el-row>
@@ -180,7 +179,7 @@
           <el-form :model="b2bForm" :rules="b2bRules" ref="b2bFormRef" label-width="100px">
             <el-form-item label="平台" prop="platform">
               <el-select v-model="b2bForm.platform" placeholder="选择平台" style="width:100%">
-                <el-option label="阿里巴巴国际站" value="alibaba" />
+                <el-option label="1688 / 阿里巴巴国际站" value="alibaba" />
                 <el-option label="环球资源" value="globalsources" />
                 <el-option label="中国制造网" value="made-in-china" />
                 <el-option label="TradeKey" value="tradekey" />

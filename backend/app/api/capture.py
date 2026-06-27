@@ -223,16 +223,15 @@ async def start_search_capture(
     # ── 连通性预检 ──
     from app.services.scraper import check_connectivity as do_check
     connectivity = do_check()
+    baidu_ok = connectivity.get("baidu", {}).get("reachable", False)
     google_ok = connectivity.get("google", {}).get("reachable", False)
     bing_ok = connectivity.get("bing", {}).get("reachable", False)
     yp_ok = connectivity.get("yellow_pages", {}).get("reachable", False)
 
-    if not google_ok and not bing_ok and not yp_ok:
+    if not baidu_ok and not google_ok and not bing_ok and not yp_ok:
         task["status"] = "failed"
         task["message"] = (
-            "采集失败：Google、Bing、Yellow Pages 均不可达。"
-            "服务器可能位于境内网络，境外搜索引擎被防火墙拦截。"
-            "建议：1) 配置代理环境变量 SCRAPER_PROXY_URL；2) 使用测试模式生成模拟数据验证功能"
+            "采集失败：百度、Google、Bing 均不可达。请检查网络连接。"
         )
         task["new_leads"] = 0
         task["total_collected"] = 0
@@ -306,18 +305,16 @@ async def start_b2b_capture(
     from app.services.scraper import check_connectivity as do_check
     connectivity = do_check()
     _platform_to_conn = {
-        "alibaba": "alibaba", "globalsources": "alibaba",
-        "made-in-china": "made_in_china", "tradekey": "alibaba",
+        "alibaba": ["alibaba", "1688"], "globalsources": ["alibaba"],
+        "made-in-china": ["made_in_china"], "tradekey": ["alibaba"],
     }
-    conn_key = _platform_to_conn.get(req.platform.lower(), req.platform.lower())
-    reachable = connectivity.get(conn_key, {}).get("reachable", False)
+    conn_keys = _platform_to_conn.get(req.platform.lower(), [req.platform.lower()])
+    reachable = any(connectivity.get(k, {}).get("reachable", False) for k in conn_keys)
 
     if not reachable:
         task["status"] = "failed"
         task["message"] = (
-            f"采集失败：平台 {req.platform} 不可达。"
-            "服务器可能位于境内网络，境外 B2B 平台被防火墙拦截。"
-            "建议：1) 配置代理环境变量 SCRAPER_PROXY_URL；2) 使用测试模式生成模拟数据验证功能"
+            f"采集失败：平台 {req.platform} 不可达。请检查网络连接。"
         )
         task["new_leads"] = 0
         task["total_collected"] = 0
