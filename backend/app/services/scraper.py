@@ -22,11 +22,13 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# ── 延迟配置 ──
-_MIN_DELAY = 1.5
-_MAX_DELAY = 4.0
-_RETRY_MAX = 2
-_RETRY_BACKOFF = 2.0
+# ── 延迟配置（境内网络环境缩短超时） ──
+_MIN_DELAY = 0.8
+_MAX_DELAY = 2.0
+_RETRY_MAX = 1          # 只重试 1 次（境内网络避免长时间等待）
+_RETRY_BACKOFF = 1.0
+_REQUEST_TIMEOUT = 8.0   # 单次请求超时 8 秒
+_QUICK_TIMEOUT = 4.0     # 连通性检查超时 4 秒
 
 # ── 代理配置（可选，通过环境变量设置） ──
 _PROXY_URL = os.getenv("SCRAPER_PROXY_URL", "")
@@ -61,8 +63,10 @@ _ACCEPT_LANGUAGES = [
 ]
 
 
-def _get_client(timeout: float = 15.0) -> httpx.Client:
+def _get_client(timeout: float = None) -> httpx.Client:
     """创建带随机 UA 的 HTTP 客户端"""
+    if timeout is None:
+        timeout = _REQUEST_TIMEOUT
     kwargs = {
         "headers": {
             "User-Agent": random.choice(_USER_AGENTS),
@@ -85,8 +89,10 @@ def _get_client(timeout: float = 15.0) -> httpx.Client:
     return httpx.Client(**kwargs)
 
 
-def _fetch_with_retry(url: str, timeout: float = 15.0) -> Tuple[Optional[str], int]:
+def _fetch_with_retry(url: str, timeout: float = None) -> Tuple[Optional[str], int]:
     """带重试的 HTTP 请求，返回 (响应文本, 状态码)"""
+    if timeout is None:
+        timeout = _REQUEST_TIMEOUT
     last_error = None
     for attempt in range(_RETRY_MAX + 1):
         try:
@@ -819,29 +825,89 @@ def scrape_company_website(url: str) -> Dict[str, str]:
 
 
 # ================================================================
+#  网络连通性预检
+# ================================================================
+
+_CONNECTIVITY_TARGETS = {
+    "google": "https://www.google.com",
+    "bing": "https://www.bing.com",
+    "alibaba": "https://www.alibaba.com",
+    "made_in_china": "https://www.made-in-china.com",
+    "yellow_pages": "https://www.yellowpages.com",
+}
+
+
+def check_connectivity() -> Dict[str, dict]:
+    """
+    快速检查各采集源的网络连通性（4 秒超时，不重试）。
+
+    返回: { source_name: {"reachable": bool, "latency_ms": float, "error": str} }
+    """
+    results = {}
+    for name, url in _CONNECTIVITY_TARGETS.items():
+        start = time.time()
+        try:
+            with _get_client(_QUICK_TIMEOUT) as client:
+                resp = client.get(url)
+                latency = (time.time() - start) * 1000
+                results[name] = {
+                    "reachable": resp.status_code < 500,
+                    "latency_ms": round(latency, 1),
+                    "error": "" if resp.status_code < 500 else f"HTTP {resp.status_code}",
+                }
+        except httpx.TimeoutException:
+            results[name] = {
+                "reachable": False,
+                "latency_ms": round((time.time() - start) * 1000, 1),
+                "error": "连接超时（可能被防火墙拦截）",
+            }
+        except Exception as e:
+            results[name] = {
+                "reachable": False,
+                "latency_ms": round((time.time() - start) * 1000, 1),
+                "error": str(e)[:100],
+            }
+    return results
+
+
+# ================================================================
 #  统一采集入口
 # ================================================================
 
 def collect_search_engine(keyword: str, country: str = "", max_results: int = 20) -> List[dict]:
     """
-    搜索引擎采集入口：先试 Google，失败则用 Bing，再失败用 Yellow Pages。
+    搜索引擎采集入口：先检查连通性，跳过被墙的源。
     """
     logger.info(f"搜索引擎采集: keyword={keyword}, country={country}")
 
+    # 快速连通性检查
+    connectivity = check_connectivity()
+    google_ok = connectivity.get("google", {}).get("reachable", False)
+    bing_ok = connectivity.get("bing", {}).get("reachable", False)
+    yp_ok = connectivity.get("yellow_pages", {}).get("reachable", False)
+
+    if not google_ok and not bing_ok and not yp_ok:
+        logger.warning("所有搜索引擎均不可达，跳过采集")
+        return []
+
     # 1. 尝试 Google
-    leads = search_google(keyword, country, max_results)
-    if leads:
-        return leads
+    if google_ok:
+        leads = search_google(keyword, country, max_results)
+        if leads:
+            return leads
+        logger.info("Google 无结果，尝试 Bing...")
 
     # 2. 降级到 Bing
-    logger.info("Google 无结果，尝试 Bing...")
-    leads = search_bing(keyword, country, max_results)
-    if leads:
-        return leads
+    if bing_ok:
+        leads = search_bing(keyword, country, max_results)
+        if leads:
+            return leads
+        logger.info("Bing 无结果，尝试 Yellow Pages...")
 
     # 3. 降级到 Yellow Pages
-    logger.info("Bing 无结果，尝试 Yellow Pages 商业目录...")
-    leads = search_yellow_pages(keyword, country, max_results)
+    if yp_ok:
+        leads = search_yellow_pages(keyword, country, max_results)
+        return leads
 
     return leads
 
@@ -850,10 +916,22 @@ def collect_b2b(platform: str, keyword: str, max_results: int = 20) -> List[dict
     """B2B 平台采集入口"""
     scrapers = {
         "alibaba": search_alibaba,
-        "globalsources": lambda k, m: [],  # 环球资源反爬严格
+        "globalsources": lambda k, m: [],
         "made-in-china": search_made_in_china,
-        "tradekey": lambda k, m: [],  # TradeKey 需要登录
+        "tradekey": lambda k, m: [],
     }
+
+    # 连通性检查
+    connectivity = check_connectivity()
+    reachable = connectivity.get(platform, connectivity.get(
+        "alibaba" if platform == "globalsources" else platform,
+        {}
+    )).get("reachable", False)
+
+    if not reachable:
+        logger.warning(f"平台 {platform} 不可达，跳过采集")
+        return []
+
     scraper = scrapers.get(platform.lower())
     if not scraper:
         logger.warning(f"不支持的平台: {platform}")
