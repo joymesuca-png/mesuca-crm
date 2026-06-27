@@ -28,6 +28,8 @@ api.interceptors.response.use(
 // 线索来源
 export const getSources = () => api.get('/leads/sources')
 export const createSource = (data) => api.post('/leads/sources', data)
+export const updateSource = (id, data) => api.put(`/leads/sources/${id}`, data)
+export const deleteSource = (id) => api.delete(`/leads/sources/${id}`)
 
 // 客户线索
 export const getLeads = (params) => api.get('/leads/', { params })

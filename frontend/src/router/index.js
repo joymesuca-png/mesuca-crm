@@ -33,6 +33,12 @@ const routes = [
         name: 'Capture',
         component: () => import('../views/Capture.vue'),
         meta: { title: '获客采集' }
+      },
+      {
+        path: 'sources',
+        name: 'Sources',
+        component: () => import('../views/Sources.vue'),
+        meta: { title: '来源管理' }
       }
     ]
   }

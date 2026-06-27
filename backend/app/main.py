@@ -71,9 +71,12 @@ async def startup_event():
         from app.models import lead  # noqa: F401
         Base.metadata.create_all(bind=engine)
         logger.info("数据库表初始化完成")
+
+        # 初始化默认线索来源
+        from app.core.seed import seed_default_sources
+        seed_default_sources()
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")
-        # 不阻止启动，允许应用运行后手动修复
 
     logger.info("=" * 50)
 
