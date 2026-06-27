@@ -80,6 +80,10 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # 代理配置：取消注释并填入你电脑的局域网 IP
+      # 先在电脑上运行: python tools/proxy_server.py
+      # 然后将下面的 IP 改为你电脑的 IP
+      # - SCRAPER_PROXY_URL=http://192.168.x.x:8888
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,6 +107,8 @@ services:
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      # 代理配置（同 backend）
+      # - SCRAPER_PROXY_URL=http://192.168.x.x:8888
     depends_on:
       - backend
       - redis

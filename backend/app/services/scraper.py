@@ -33,6 +33,15 @@ _QUICK_TIMEOUT = 4.0     # 连通性检查超时 4 秒
 # ── 代理配置（可选，通过环境变量设置） ──
 _PROXY_URL = os.getenv("SCRAPER_PROXY_URL", "")
 
+# 配置了代理说明走 VPN，放宽超时和重试
+if _PROXY_URL:
+    _REQUEST_TIMEOUT = 15.0
+    _QUICK_TIMEOUT = 8.0
+    _RETRY_MAX = 2
+    _MIN_DELAY = 1.0
+    _MAX_DELAY = 3.0
+    logger.info(f"检测到代理配置: {_PROXY_URL}，已调整超时参数")
+
 
 def _sleep(min_s: float = None, max_s: float = None):
     """随机延迟，模拟人类行为"""

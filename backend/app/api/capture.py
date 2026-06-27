@@ -146,17 +146,27 @@ _NORMAL_MAX = 30
 async def check_connectivity():
     """快速检查采集源网络连通性（4 秒超时）"""
     from app.services.scraper import check_connectivity as do_check
+    import os
     result = do_check()
     reachable = [k for k, v in result.items() if v.get("reachable")]
     unreachable = [k for k, v in result.items() if not v.get("reachable")]
-    if not reachable:
-        msg = "所有境外采集源均不可达。服务器可能位于境内网络，境外网站被防火墙拦截。请配置代理 SCRAPER_PROXY_URL 或使用测试模式。"
+    proxy = os.getenv("SCRAPER_PROXY_URL", "")
+    if proxy:
+        if not reachable:
+            msg = f"已配置代理 {proxy}，但所有境外采集源仍不可达。请检查代理是否正常运行。"
+        else:
+            msg = f"代理 {proxy} 工作正常！可用的采集源：{', '.join(reachable)}"
     else:
-        msg = f"可用的采集源：{', '.join(reachable)}。不可用：{', '.join(unreachable) if unreachable else '无'}"
+        if not reachable:
+            msg = "所有境外采集源均不可达。服务器可能位于境内网络，境外网站被防火墙拦截。请配置代理 SCRAPER_PROXY_URL 或使用测试模式。"
+        else:
+            msg = f"可用的采集源：{', '.join(reachable)}。不可用：{', '.join(unreachable) if unreachable else '无'}"
     return {
         "sources": result,
         "timestamp": datetime.now(UTC).isoformat(),
         "message": msg,
+        "proxy_configured": bool(proxy),
+        "proxy_url": proxy or None,
     }
 
 
