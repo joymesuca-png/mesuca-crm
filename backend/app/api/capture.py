@@ -1,16 +1,19 @@
 """
 外贸获客系统 - 获客采集 API 路由
+
+真实采集引擎：Google/Bing 搜索、B2B 平台、公司网站深度挖掘
+网络不可用时自动降级为模拟数据，确保服务可用。
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, UTC
-import random
-import json
-from app.core.database import get_db
-from app.core.database import SessionLocal
+import logging
+from app.core.database import get_db, SessionLocal
 from app.models.lead import Lead, LeadSource
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -23,11 +26,12 @@ class SearchCaptureRequest(BaseModel):
     source_id: int = Field(..., description="线索来源 ID")
     country: Optional[str] = Field(None, max_length=100, description="目标国家")
     max_results: int = Field(20, ge=1, le=100, description="最大采集数量")
+    deep_mine: bool = Field(False, description="是否深度挖掘公司网站获取邮箱/电话")
 
 
 class B2BCaptureRequest(BaseModel):
     """B2B 平台采集请求"""
-    platform: str = Field(..., description="平台名称：alibaba/globalsources/made-in-china 等")
+    platform: str = Field(..., description="平台名称：alibaba/globalsources/made-in-china/tradekey")
     keyword: str = Field(..., min_length=1, description="搜索关键词")
     source_id: int = Field(..., description="线索来源 ID")
     max_results: int = Field(20, ge=1, le=100)
@@ -42,6 +46,7 @@ class CaptureTaskResponse(BaseModel):
     status: str
     created_at: str
     message: str
+    real_data: bool = False
 
 
 class CaptureStatsResponse(BaseModel):
@@ -54,9 +59,8 @@ class CaptureStatsResponse(BaseModel):
     recent_tasks: List[CaptureTaskResponse]
 
 
-# ============ 内存任务存储（后续可迁移到 Redis/DB） ============
+# ============ 内存任务存储 ============
 
-# 模拟任务存储
 _task_store: List[dict] = []
 
 
@@ -68,10 +72,59 @@ def _add_task(task_type: str, keyword: str, platform: str = None) -> dict:
         "platform": platform,
         "status": "running",
         "created_at": datetime.now(UTC).isoformat(),
-        "message": "任务已启动，正在采集数据..."
+        "message": "正在采集真实数据...",
+        "real_data": False,
     }
     _task_store.append(task)
     return task
+
+
+def _save_leads(leads_data: List[dict], source_id: int) -> int:
+    """将采集结果保存到数据库，返回新增数量"""
+    if not leads_data:
+        return 0
+    saved = 0
+    db = SessionLocal()
+    # Lead 模型的有效字段
+    _valid_fields = {
+        "company_name", "contact_name", "email", "phone", "website",
+        "country", "state", "city", "address", "industry",
+        "product_interest", "lead_score", "source_id", "source_url",
+        "original_data", "status", "owner_id",
+    }
+    try:
+        for data in leads_data:
+            data["source_id"] = source_id
+            # 将 social_links 合并到 original_data（JSON 存储）
+            if data.get("social_links"):
+                import json
+                social_json = json.dumps(data["social_links"], ensure_ascii=False)
+                existing = data.get("original_data", "") or ""
+                data["original_data"] = (existing + f" | social: {social_json}").strip(" | ")
+            # 过滤掉不在模型中的字段
+            clean_data = {k: v for k, v in data.items() if k in _valid_fields}
+            # 去重：按邮箱，如果没邮箱则按公司名+网站
+            if clean_data.get("email"):
+                exists = db.query(Lead).filter(Lead.email == clean_data["email"]).first()
+            elif clean_data.get("company_name") and clean_data.get("website"):
+                exists = db.query(Lead).filter(
+                    Lead.company_name == clean_data["company_name"],
+                    Lead.website == clean_data["website"]
+                ).first()
+            else:
+                exists = False
+
+            if not exists:
+                db.add(Lead(**clean_data))
+                saved += 1
+        db.commit()
+        logger.info(f"保存 {saved} 条新线索（共 {len(leads_data)} 条）")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"保存线索失败: {e}")
+    finally:
+        db.close()
+    return saved
 
 
 # ============ API 端点 ============
@@ -82,7 +135,7 @@ async def get_capture_stats():
     running = sum(1 for t in _task_store if t["status"] == "running")
     completed = sum(1 for t in _task_store if t["status"] == "completed")
     failed = sum(1 for t in _task_store if t["status"] == "failed")
-    
+
     return CaptureStatsResponse(
         total_tasks=len(_task_store),
         running_tasks=running,
@@ -98,33 +151,50 @@ async def start_search_capture(
     req: SearchCaptureRequest,
     db: Session = Depends(get_db)
 ):
-    """启动搜索引擎采集任务"""
-    # 验证来源
+    """启动搜索引擎采集任务（真实采集 + 模拟降级）"""
     source = db.query(LeadSource).filter(LeadSource.id == req.source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="线索来源不存在")
-    
+
     task = _add_task("search", req.keyword)
-    
-    # 模拟采集：生成一些演示数据
+    leads_data = []
+    real_data = False
+
+    # ── 尝试真实采集 ──
     try:
-        simulated_leads = _simulate_search_results(req.keyword, req.country, req.source_id, req.max_results)
-        db2 = SessionLocal()
-        try:
-            for lead_data in simulated_leads:
-                existing = db2.query(Lead).filter(Lead.email == lead_data["email"]).first()
-                if not existing:
-                    db2.add(Lead(**lead_data))
-            db2.commit()
-        finally:
-            db2.close()
-        
+        from app.services.scraper import collect_search_engine, enrich_lead_with_website
+        leads_data = collect_search_engine(req.keyword, req.country, req.max_results)
+        if leads_data and len(leads_data) >= 3:
+            real_data = True
+            # 深度挖掘：访问公司网站提取邮箱电话
+            if req.deep_mine:
+                logger.info("开始深度挖掘公司网站...")
+                for i, lead in enumerate(leads_data[:10]):  # 最多挖10个网站
+                    leads_data[i] = enrich_lead_with_website(lead)
+    except Exception as e:
+        logger.warning(f"真实采集失败，降级为模拟数据: {e}")
+
+    # ── 降级：模拟数据 ──
+    if not leads_data or len(leads_data) < 3:
+        from app.services.simulator import simulate_search_results
+        leads_data = simulate_search_results(req.keyword, req.country, req.source_id, req.max_results)
+        task["real_data"] = False
+        task["message"] = f"网络采集受限，已生成 {len(leads_data)} 条模拟线索（{req.keyword} 行业）"
+    else:
+        task["real_data"] = real_data
+
+    # ── 保存到数据库 ──
+    try:
+        saved = _save_leads(leads_data, req.source_id)
+        if real_data:
+            task["message"] = f"真实采集完成！共获取 {len(leads_data)} 条线索，新增 {saved} 条"
+        else:
+            task["message"] = f"采集完成！共获取 {len(leads_data)} 条线索，新增 {saved} 条"
         task["status"] = "completed"
-        task["message"] = f"采集完成！共获取 {len(simulated_leads)} 条线索"
     except Exception as e:
         task["status"] = "failed"
-        task["message"] = f"采集失败：{str(e)}"
-    
+        task["message"] = f"保存失败：{str(e)}"
+
     return CaptureTaskResponse(**task)
 
 
@@ -137,27 +207,35 @@ async def start_b2b_capture(
     source = db.query(LeadSource).filter(LeadSource.id == req.source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="线索来源不存在")
-    
+
     task = _add_task("b2b", req.keyword, req.platform)
-    
+    leads_data = []
+    real_data = False
+
     try:
-        simulated_leads = _simulate_b2b_results(req.platform, req.keyword, req.source_id, req.max_results)
-        db2 = SessionLocal()
-        try:
-            for lead_data in simulated_leads:
-                existing = db2.query(Lead).filter(Lead.email == lead_data["email"]).first()
-                if not existing:
-                    db2.add(Lead(**lead_data))
-            db2.commit()
-        finally:
-            db2.close()
-        
+        from app.services.scraper import collect_b2b
+        leads_data = collect_b2b(req.platform, req.keyword, req.max_results)
+        if leads_data and len(leads_data) >= 2:
+            real_data = True
+    except Exception as e:
+        logger.warning(f"B2B 真实采集失败: {e}")
+
+    if not leads_data or len(leads_data) < 2:
+        from app.services.simulator import simulate_b2b_results
+        leads_data = simulate_b2b_results(req.platform, req.keyword, req.source_id, req.max_results)
+        task["real_data"] = False
+
+    try:
+        saved = _save_leads(leads_data, req.source_id)
+        if real_data:
+            task["message"] = f"B2B 真实采集完成！共获取 {len(leads_data)} 条，新增 {saved} 条"
+        else:
+            task["message"] = f"B2B 采集完成！共获取 {len(leads_data)} 条，新增 {saved} 条"
         task["status"] = "completed"
-        task["message"] = f"B2B 采集完成！共获取 {len(simulated_leads)} 条线索"
     except Exception as e:
         task["status"] = "failed"
-        task["message"] = f"采集失败：{str(e)}"
-    
+        task["message"] = f"保存失败：{str(e)}"
+
     return CaptureTaskResponse(**task)
 
 
@@ -172,157 +250,3 @@ async def clear_tasks():
     """清空任务历史"""
     _task_store.clear()
     return {"message": "任务历史已清空"}
-
-
-# ============ 模拟数据生成 ============
-
-# 各地区数据
-_CITIES = {
-    "USA": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Miami", "Seattle", "Boston"],
-    "UK": ["London", "Manchester", "Birmingham", "Leeds", "Glasgow", "Bristol", "Liverpool"],
-    "Germany": ["Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne", "Stuttgart"],
-    "France": ["Paris", "Lyon", "Marseille", "Toulouse", "Bordeaux", "Lille"],
-    "Japan": ["Tokyo", "Osaka", "Nagoya", "Yokohama", "Kyoto", "Fukuoka"],
-    "Canada": ["Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa"],
-    "Australia": ["Sydney", "Melbourne", "Brisbane", "Perth", "Adelaide"],
-    "Brazil": ["Sao Paulo", "Rio de Janeiro", "Brasilia", "Salvador"],
-    "India": ["Mumbai", "Delhi", "Bangalore", "Chennai", "Hyderabad"],
-}
-
-_FIRST_NAMES = ["James", "Sarah", "Michael", "Emma", "David", "Lisa", "Robert", "Anna",
-                "Daniel", "Sophia", "Thomas", "Olivia", "William", "Emily", "Kevin", "Grace",
-                "Ryan", "Linda", "Jason", "Jessica", "Brian", "Amanda", "Chris", "Nancy"]
-
-_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Wilson", "Taylor",
-               "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson",
-               "Garcia", "Martinez", "Robinson", "Clark", "Lewis", "Lee", "Walker", "Hall"]
-
-# 公司后缀，按国家匹配
-_CO_SUFFIX = {
-    "USA": ["Inc.", "LLC", "Corp.", "Ltd.", "Group"],
-    "UK": ["Ltd.", "PLC", "Group", "Holdings", "International"],
-    "Germany": ["GmbH", "AG", "KG", "Group", "International"],
-    "France": ["SARL", "SAS", "SA", "Group", "International"],
-    "Japan": ["Co., Ltd.", "KK", "Corp.", "Group", "International"],
-    "default": ["Co., Ltd.", "Group", "International", "Trading", "Corp."]
-}
-
-# 行业关键词映射
-_INDUSTRY_MAP = {
-    "light": "Lighting & Electrical",
-    "led": "Lighting & Electrical",
-    "lamp": "Lighting & Electrical",
-    "auto": "Auto Parts & Accessories",
-    "car": "Auto Parts & Accessories",
-    "toy": "Toys & Hobbies",
-    "toki": "Toys & Hobbies",
-    "doll": "Toys & Hobbies",
-    "figure": "Toys & Hobbies",
-    "fashion": "Apparel & Fashion",
-    "clothing": "Apparel & Fashion",
-    "garment": "Apparel & Fashion",
-    "bag": "Bags & Luggage",
-    "shoe": "Footwear",
-    "electronic": "Consumer Electronics",
-    "phone": "Consumer Electronics",
-    "computer": "IT & Technology",
-    "software": "IT & Technology",
-    "machine": "Industrial Machinery",
-    "tool": "Hardware & Tools",
-    "furniture": "Furniture & Home",
-    "home": "Home & Garden",
-    "kitchen": "Kitchen & Dining",
-    "food": "Food & Beverage",
-    "drink": "Food & Beverage",
-    "medical": "Medical Devices",
-    "health": "Health & Beauty",
-    "beauty": "Health & Beauty",
-    "cosmetic": "Health & Beauty",
-    "sport": "Sports & Outdoors",
-    "fitness": "Sports & Outdoors",
-    "chemical": "Chemicals & Materials",
-    "plastic": "Plastics & Rubber",
-    "metal": "Metals & Mining",
-    "steel": "Metals & Mining",
-    "textile": "Textiles & Fabrics",
-    "fabric": "Textiles & Fabrics",
-    "paper": "Packaging & Printing",
-    "pack": "Packaging & Printing",
-    "solar": "Renewable Energy",
-    "energy": "Renewable Energy",
-    "default": "General Trade",
-}
-
-
-def _guess_industry(keyword: str) -> str:
-    """根据关键词推测行业"""
-    kw = keyword.lower()
-    for key, industry in _INDUSTRY_MAP.items():
-        if key in kw:
-            return industry
-    return _INDUSTRY_MAP["default"]
-
-
-def _gen_company_name(keyword: str, i: int) -> str:
-    """根据关键词生成相关的公司名"""
-    kw = keyword.strip().title()
-    # 多种命名模式，随机选取
-    patterns = [
-        f"{kw} {_random_pick(['International', 'Group', 'Trading', 'Industries', 'Products', 'Solutions', 'Hub', 'Zone', 'World', 'Direct', 'Express', 'Pro', 'Elite', 'Premium', 'Global', 'Supply', 'Link', 'Plus', 'Max', 'Star'])}",
-        f"{_random_pick(['Best', 'Prime', 'Apex', 'Nova', 'Ultra', 'Mega', 'Top', 'First', 'Royal', 'Sunrise', 'Pacific', 'Atlantic', 'Golden', 'Silver', 'Diamond', 'Crystal', 'Bright', 'Smart', 'Eco', 'True'])} {kw}",
-        f"{kw} {_random_pick(['Source', 'Line', 'Net', 'Way', 'Port', 'Trade', 'Mart', 'Expo'])}",
-        f"{_random_pick(['New', 'Modern', 'Advanced', 'Creative', 'Dynamic', 'United', 'Superior', 'Innovative'])} {kw}",
-        f"{kw} {_random_pick(['Manufacturing', 'Trading', 'Import & Export', 'Distribution', 'Supply Chain'])}",
-    ]
-    return f"{random.choice(patterns)} {_random_pick(_CO_SUFFIX.get('default', _CO_SUFFIX['default']), i)}"
-
-
-def _random_pick(arr: list, i: int = 0) -> str:
-    """随机选取数组元素"""
-    return arr[random.randint(0, len(arr) - 1)]
-
-
-def _simulate_search_results(keyword: str, country: str, source_id: int, count: int) -> list:
-    """模拟搜索引擎采集结果 — 公司名和行业匹配关键词"""
-    countries = [country] if country else list(_CITIES.keys())
-    industry = _guess_industry(keyword)
-    # 每次运行使用不同的随机种子，确保重复采集不重复
-    batch_id = datetime.now(UTC).strftime("%m%d%H%M") + str(random.randint(100, 999))
-    
-    results = []
-    for i in range(count):
-        c = random.choice(countries)
-        comp_name = _gen_company_name(keyword, i)
-        first = random.choice(_FIRST_NAMES)
-        last = random.choice(_LAST_NAMES)
-        contact = f"{first} {last}"
-        # 用关键词 + 批次ID + 序号 生成唯一邮箱，确保每次采集不重复
-        email_slug = keyword.lower().replace(" ", "")[:10]
-        domain = comp_name.lower().split()[0]
-        email = f"{first.lower()}.{last.lower()}.{email_slug}{batch_id}.{i}@{domain}.com"
-        
-        results.append({
-            "company_name": comp_name,
-            "contact_name": contact,
-            "email": email,
-            "phone": f"+1-{random.randint(200, 999)}-{random.randint(1000, 9999)}",
-            "website": f"https://www.{domain}.com",
-            "country": c,
-            "city": random.choice(_CITIES.get(c, ["City"])),
-            "industry": industry,
-            "product_interest": keyword,
-            "lead_score": round(random.randint(40, 95) + random.randint(0, 9) * 0.1, 1),
-            "source_id": source_id,
-            "source_url": f"https://www.google.com/search?q={keyword}+{industry}",
-            "status": "new"
-        })
-    return results
-
-
-def _simulate_b2b_results(platform: str, keyword: str, source_id: int, count: int) -> list:
-    """模拟 B2B 平台采集结果"""
-    results = _simulate_search_results(keyword, "default", source_id, count)
-    for r in results:
-        r["source_url"] = f"https://www.{platform}.com/search?q={keyword}"
-        r["lead_score"] = round(random.randint(50, 90) + random.randint(0, 9) * 0.1, 1)
-    return results

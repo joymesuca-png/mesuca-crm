@@ -96,6 +96,13 @@
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="real_data" label="数据源" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.real_data ? 'success' : 'warning'" size="small">
+              {{ row.real_data ? '真实采集' : '模拟数据' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="message" label="结果" min-width="200" />
         <el-table-column prop="created_at" label="时间" width="180">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
@@ -132,6 +139,12 @@
             </el-form-item>
             <el-form-item label="采集数量">
               <el-input-number v-model="searchForm.max_results" :min="1" :max="100" style="width:100%" />
+            </el-form-item>
+            <el-form-item label="深度挖掘">
+              <el-switch v-model="searchForm.deep_mine" active-text="访问公司网站提取邮箱/电话" />
+              <div style="font-size:12px;color:#909399;margin-top:4px">
+                开启后会逐个访问搜索结果中的公司网站，提取联系邮箱和电话，采集速度较慢但信息更准确
+              </div>
             </el-form-item>
           </el-form>
         </el-tab-pane>
@@ -197,7 +210,7 @@ const showTaskDialog = ref(false)
 const activeTab = ref('search')
 const taskDialogTitle = computed(() => activeTab.value === 'search' ? '搜索引擎采集' : 'B2B 平台采集')
 
-const searchForm = reactive({ keyword: '', country: '', source_id: null, max_results: 20 })
+const searchForm = reactive({ keyword: '', country: '', source_id: null, max_results: 20, deep_mine: false })
 const searchRules = {
   keyword: [{ required: true, message: '请输入搜索关键词', trigger: 'blur' }],
   source_id: [{ required: true, message: '请选择线索来源', trigger: 'change' }]
@@ -226,6 +239,7 @@ const openCustomsCapture = () => ElMessage.info('海关数据采集功能开发�
 const onTabChange = () => { /* 切换 tab 时重置校验 */ }
 const resetForm = () => {
   searchFormRef.value?.resetFields()
+  searchForm.deep_mine = false
   b2bFormRef.value?.resetFields()
 }
 

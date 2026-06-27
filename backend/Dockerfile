@@ -21,6 +21,9 @@ COPY requirements.txt .
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 安装 Playwright 浏览器（用于高级采集）
+RUN playwright install --with-deps chromium 2>/dev/null || true
+
 # 复制应用代码
 COPY . .
 
