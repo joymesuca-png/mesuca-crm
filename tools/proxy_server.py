@@ -189,6 +189,47 @@ async def handle_client(client_reader, client_writer):
             pass
 
 
+def get_lan_ip():
+    """获取本机局域网 IP（非 127.x 回环地址）"""
+    # 方法1：尝试连接 NAS 的地址来确定本机使用的网卡 IP
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        # 不实际发送数据，只是让 OS 选路由
+        s.connect(("172.18.1.20", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        if not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+
+    # 方法2：通过 getaddrinfo 获取本机名对应的所有 IP
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                return ip
+    except Exception:
+        pass
+
+    # 方法3：遍历常见网段
+    for prefix in ["172.", "192.168.", "10."]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.5)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip.startswith(prefix):
+                return ip
+        except Exception:
+            pass
+
+    return socket.gethostbyname(socket.gethostname())
+
+
 async def main():
     # 检查 Python 版本
     if sys.version_info < (3, 8):
@@ -196,7 +237,7 @@ async def main():
         return
 
     # 获取本机局域网 IP
-    local_ip = socket.gethostbyname(socket.gethostname())
+    local_ip = get_lan_ip()
 
     server = await asyncio.start_server(handle_client, HOST, PORT)
 
