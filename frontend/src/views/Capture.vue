@@ -243,12 +243,12 @@ const showTaskDialog = ref(false)
 const activeTab = ref('search')
 const taskDialogTitle = computed(() => activeTab.value === 'search' ? '搜索引擎采集' : 'B2B 平台采集')
 
-const searchForm = reactive({ keyword: '', country: '', source_id: null, max_results: 20, deep_mine: false, simulate: false })
+const searchForm = reactive({ keyword: '', country: '', source_id: null, max_results: 5, deep_mine: false, simulate: false })
 const searchRules = {
   keyword: [{ required: true, message: '请输入搜索关键词', trigger: 'blur' }],
   source_id: [{ required: true, message: '请选择线索来源', trigger: 'change' }]
 }
-const b2bForm = reactive({ platform: '', keyword: '', source_id: null, max_results: 20, simulate: false })
+const b2bForm = reactive({ platform: '', keyword: '', source_id: null, max_results: 5, simulate: false })
 const b2bRules = {
   platform: [{ required: true, message: '请选择平台', trigger: 'change' }],
   keyword: [{ required: true, message: '请输入关键词', trigger: 'blur' }],

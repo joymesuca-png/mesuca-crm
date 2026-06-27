@@ -28,7 +28,7 @@ class SearchCaptureRequest(BaseModel):
     keyword: str = Field(..., min_length=1, max_length=200, description="搜索关键词")
     source_id: int = Field(..., description="线索来源 ID")
     country: Optional[str] = Field(None, max_length=100, description="目标国家")
-    max_results: int = Field(20, ge=1, le=100, description="最大采集数量")
+    max_results: int = Field(5, ge=1, le=100, description="最大采集数量")
     deep_mine: bool = Field(False, description="是否深度挖掘公司网站获取邮箱/电话")
     simulate: bool = Field(False, description="（仅测试）显式使用模拟数据，不进行真实采集")
 
@@ -38,7 +38,7 @@ class B2BCaptureRequest(BaseModel):
     platform: str = Field(..., description="平台名称：alibaba/globalsources/made-in-china/tradekey")
     keyword: str = Field(..., min_length=1, description="搜索关键词")
     source_id: int = Field(..., description="线索来源 ID")
-    max_results: int = Field(20, ge=1, le=100)
+    max_results: int = Field(5, ge=1, le=100)
     simulate: bool = Field(False, description="（仅测试）显式使用模拟数据，不进行真实采集")
 
 
