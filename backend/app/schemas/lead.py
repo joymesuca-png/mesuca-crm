@@ -1,7 +1,7 @@
 """
 外贸获客系统 - Pydantic 数据模式
 """
-from pydantic import BaseModel, EmailStr, HttpUrl, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -23,6 +23,8 @@ class LeadSourceEnum(str, Enum):
     B2B_PLATFORM = "b2b_platform"
     CUSTOMS_DATA = "customs_data"
     MAP = "map"
+    EXHIBITION = "exhibition"
+    MANUAL = "manual"
     OTHER = "other"
 
 
@@ -54,8 +56,8 @@ class LeadSourceResponse(LeadSourceBase):
     model_config = ConfigDict(from_attributes=True)
     
     id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 # ============ 客户线索相关模式 ============

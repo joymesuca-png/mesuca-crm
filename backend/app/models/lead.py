@@ -1,7 +1,7 @@
 """
 外贸获客系统 - 客户线索数据模型
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Float, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Float, ForeignKey, Index, func
 from sqlalchemy.orm import relationship
 from datetime import datetime, UTC
 from app.core.database import Base
@@ -16,8 +16,8 @@ class LeadSource(Base):
     type = Column(String(50), nullable=False)  # 来源类型：search_engine, social_media, b2b_platform
     description = Column(Text)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
-    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    created_at = Column(DateTime, server_default=func.now(), nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
     
     leads = relationship("Lead", back_populates="source")
 
