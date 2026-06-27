@@ -75,6 +75,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - DATABASE_TYPE=postgresql
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/lead_capture
       - MONGODB_URL=mongodb://mongodb:27017
       - REDIS_URL=redis://redis:6379/0
@@ -92,7 +93,7 @@ services:
         condition: service_healthy
     volumes:
       - ../backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # Celery Worker
   celery_worker:
@@ -101,6 +102,7 @@ services:
       dockerfile: Dockerfile
     container_name: lead_capture_celery_worker
     environment:
+      - DATABASE_TYPE=postgresql
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/lead_capture
       - MONGODB_URL=mongodb://mongodb:27017
       - REDIS_URL=redis://redis:6379/0

@@ -1,6 +1,7 @@
 """
 外贸获客系统 - 配置管理模块
 """
+import secrets
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 from functools import lru_cache
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     # 应用设置
     APP_NAME: str = "外贸获客系统"
     DEBUG: bool = True
-    SECRET_KEY: str = "your-secret-key-change-in-production"
+    SECRET_KEY: str = secrets.token_urlsafe(32)
     
     # 数据库配置 - 默认使用 SQLite 便于开发
     DATABASE_TYPE: str = "sqlite"  # sqlite, postgresql

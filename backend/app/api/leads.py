@@ -2,19 +2,19 @@
 外贸获客系统 - 客户线索 API 路由
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from typing import List, Optional
+from sqlalchemy.orm import Session, joinedload
+from typing import Optional
 from app.core.database import get_db
 from app.models.lead import Lead, LeadSource
 from app.schemas.lead import (
     LeadCreate, LeadUpdate, LeadResponse, LeadListResponse,
-    LeadSourceCreate, LeadSourceResponse, MessageResponse
+    LeadSourceCreate, LeadSourceResponse, LeadSourceUpdate, MessageResponse
 )
 
 router = APIRouter()
 
 
-@router.get("/sources", response_model=List[LeadSourceResponse])
+@router.get("/sources", response_model=list[LeadSourceResponse])
 async def get_lead_sources(
     skip: int = 0,
     limit: int = 100,
@@ -25,17 +25,52 @@ async def get_lead_sources(
     return sources
 
 
-@router.post("/sources", response_model=LeadSourceResponse)
+@router.post("/sources", response_model=LeadSourceResponse, status_code=201)
 async def create_lead_source(
     source: LeadSourceCreate,
     db: Session = Depends(get_db)
 ):
     """创建新的线索来源"""
-    db_source = LeadSource(**source.dict())
+    db_source = LeadSource(**source.model_dump())
     db.add(db_source)
     db.commit()
     db.refresh(db_source)
     return db_source
+
+
+@router.put("/sources/{source_id}", response_model=LeadSourceResponse)
+async def update_lead_source(
+    source_id: int,
+    source_update: LeadSourceUpdate,
+    db: Session = Depends(get_db)
+):
+    """更新线索来源"""
+    db_source = db.query(LeadSource).filter(LeadSource.id == source_id).first()
+    if not db_source:
+        raise HTTPException(status_code=404, detail="线索来源不存在")
+    
+    update_data = source_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_source, field, value)
+    
+    db.commit()
+    db.refresh(db_source)
+    return db_source
+
+
+@router.delete("/sources/{source_id}", response_model=MessageResponse)
+async def delete_lead_source(
+    source_id: int,
+    db: Session = Depends(get_db)
+):
+    """删除线索来源"""
+    db_source = db.query(LeadSource).filter(LeadSource.id == source_id).first()
+    if not db_source:
+        raise HTTPException(status_code=404, detail="线索来源不存在")
+    
+    db.delete(db_source)
+    db.commit()
+    return {"message": "线索来源已成功删除"}
 
 
 @router.get("/", response_model=LeadListResponse)
@@ -49,7 +84,7 @@ async def get_leads(
     db: Session = Depends(get_db)
 ):
     """获取客户线索列表（支持分页和筛选）"""
-    query = db.query(Lead)
+    query = db.query(Lead).options(joinedload(Lead.source))
     
     # 应用筛选条件
     if status:
@@ -69,7 +104,7 @@ async def get_leads(
     
     # 分页
     offset = (page - 1) * page_size
-    leads = query.offset(offset).limit(page_size).all()
+    leads = query.order_by(Lead.created_at.desc()).offset(offset).limit(page_size).all()
     
     return LeadListResponse(
         items=leads,
@@ -79,7 +114,7 @@ async def get_leads(
     )
 
 
-@router.post("/", response_model=LeadResponse)
+@router.post("/", response_model=LeadResponse, status_code=201)
 async def create_lead(
     lead: LeadCreate,
     db: Session = Depends(get_db)
@@ -90,10 +125,7 @@ async def create_lead(
     if not source:
         raise HTTPException(status_code=404, detail="线索来源不存在")
     
-    db_lead = Lead(**lead.dict(exclude={'source_url'}))
-    if lead.source_url:
-        db_lead.source_url = str(lead.source_url)
-    
+    db_lead = Lead(**lead.model_dump())
     db.add(db_lead)
     db.commit()
     db.refresh(db_lead)
@@ -106,7 +138,7 @@ async def get_lead(
     db: Session = Depends(get_db)
 ):
     """获取单个客户线索详情"""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    lead = db.query(Lead).options(joinedload(Lead.source)).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="线索不存在")
     return lead
@@ -119,11 +151,11 @@ async def update_lead(
     db: Session = Depends(get_db)
 ):
     """更新客户线索"""
-    db_lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    db_lead = db.query(Lead).options(joinedload(Lead.source)).filter(Lead.id == lead_id).first()
     if not db_lead:
         raise HTTPException(status_code=404, detail="线索不存在")
     
-    update_data = lead_update.dict(exclude_unset=True)
+    update_data = lead_update.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(db_lead, field, value)
     

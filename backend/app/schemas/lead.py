@@ -1,7 +1,7 @@
 """
 外贸获客系统 - Pydantic 数据模式
 """
-from pydantic import BaseModel, EmailStr, HttpUrl, Field, validator
+from pydantic import BaseModel, EmailStr, HttpUrl, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -51,12 +51,11 @@ class LeadSourceUpdate(BaseModel):
 
 class LeadSourceResponse(LeadSourceBase):
     """线索来源响应"""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     created_at: datetime
     updated_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 # ============ 客户线索相关模式 ============
@@ -67,7 +66,7 @@ class LeadBase(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=100)
     email: Optional[EmailStr] = None
     phone: Optional[str] = Field(None, max_length=50)
-    website: Optional[HttpUrl] = None
+    website: Optional[str] = Field(None, max_length=200)
     country: Optional[str] = Field(None, max_length=100)
     state: Optional[str] = Field(None, max_length=100)
     city: Optional[str] = Field(None, max_length=100)
@@ -75,7 +74,7 @@ class LeadBase(BaseModel):
     industry: Optional[str] = Field(None, max_length=100)
     product_interest: Optional[str] = Field(None, max_length=500)
     lead_score: float = 0.0
-    source_url: Optional[HttpUrl] = None
+    source_url: Optional[str] = Field(None, max_length=500)
     original_data: Optional[str] = None  # JSON string
 
 
@@ -90,7 +89,7 @@ class LeadUpdate(BaseModel):
     contact_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
-    website: Optional[HttpUrl] = None
+    website: Optional[str] = None
     country: Optional[str] = None
     state: Optional[str] = None
     city: Optional[str] = None
@@ -100,12 +99,16 @@ class LeadUpdate(BaseModel):
     lead_score: Optional[float] = None
     status: Optional[LeadStatusEnum] = None
     owner_id: Optional[int] = None
+    source_id: Optional[int] = None
+    source_url: Optional[str] = None
     email_verified: Optional[bool] = None
     phone_verified: Optional[bool] = None
 
 
 class LeadResponse(LeadBase):
     """客户线索响应"""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     source_id: Optional[int] = None
     status: LeadStatusEnum
@@ -116,9 +119,6 @@ class LeadResponse(LeadBase):
     updated_at: datetime
     last_contacted_at: Optional[datetime] = None
     source: Optional[LeadSourceResponse] = None
-    
-    class Config:
-        from_attributes = True
 
 
 class LeadListResponse(BaseModel):
@@ -145,13 +145,12 @@ class LeadNoteCreate(LeadNoteBase):
 
 class LeadNoteResponse(LeadNoteBase):
     """跟进记录响应"""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     lead_id: int
     user_id: int
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 # ============ 标签相关模式 ============
@@ -169,11 +168,10 @@ class TagCreate(TagBase):
 
 class TagResponse(TagBase):
     """标签响应"""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 # ============ 用户相关模式 ============
@@ -193,12 +191,11 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     """用户响应"""
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     is_active: bool
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 
 # ============ 通用响应模式 ============

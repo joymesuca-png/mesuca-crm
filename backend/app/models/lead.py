@@ -3,7 +3,7 @@
 """
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Float, ForeignKey, Index
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, UTC
 from app.core.database import Base
 
 
@@ -16,8 +16,8 @@ class LeadSource(Base):
     type = Column(String(50), nullable=False)  # 来源类型：search_engine, social_media, b2b_platform
     description = Column(Text)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     
     leads = relationship("Lead", back_populates="source")
 
@@ -60,8 +60,8 @@ class Lead(Base):
     phone_verified = Column(Boolean, default=False)  # 电话是否验证
     
     # 时间戳
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     last_contacted_at = Column(DateTime, nullable=True)
     
     # 关系
@@ -87,7 +87,7 @@ class User(Base):
     full_name = Column(String(100))
     role = Column(String(50), default='user')  # admin, user, viewer
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     
     # leads = relationship("Lead", back_populates="owner")
 
@@ -101,7 +101,7 @@ class LeadNote(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     content = Column(Text, nullable=False)
     note_type = Column(String(50), default='general')  # general, call, email, meeting
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     
     lead = relationship("Lead", back_populates="notes")
 
@@ -113,7 +113,7 @@ class Tag(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), unique=True, nullable=False)
     color = Column(String(7), default='#3498db')  # 十六进制颜色
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     
     # leads = relationship("LeadTag", back_populates="tag")
 

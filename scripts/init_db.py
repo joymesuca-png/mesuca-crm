@@ -10,8 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.app.core.database import Base, engine
-from backend.app.models.lead import Lead, LeadSource, LeadNote, Tag
-from backend.app.models.user import User
+from backend.app.models.lead import Lead, LeadSource, LeadNote, User, Tag, LeadTag
 
 def init_db():
     """初始化数据库，创建所有表"""

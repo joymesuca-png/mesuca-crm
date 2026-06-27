@@ -29,7 +29,12 @@ if ! command -v docker &> /dev/null; then
     echo -e "${RED}错误：未检测到 Docker，请先在飞牛OS应用中心安装 Docker${NC}"
     exit 1
 fi
-if ! command -v docker-compose &> /dev/null; then
+# 兼容 docker-compose v1 和 v2
+if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+else
     echo -e "${RED}错误：未检测到 Docker Compose${NC}"
     exit 1
 fi
@@ -105,12 +110,14 @@ echo -e "${GREEN}Elasticsearch 内存限制已设置为 1GB${NC}"
 
 # 5. 构建并启动服务
 echo -e "${YELLOW}[5/6] 构建 Docker 镜像 (首次运行可能需要 5-10 分钟)...${NC}"
-docker-compose up -d --build
+cd docker
+$DOCKER_COMPOSE up -d --build
+cd ..
 
 # 6. 检查服务状态
 echo -e "${YELLOW}[6/6] 检查服务运行状态...${NC}"
 sleep 5
-docker-compose ps
+$DOCKER_COMPOSE ps
 
 echo ""
 echo -e "${GREEN}=========================================${NC}"
@@ -118,7 +125,7 @@ echo -e "${GREEN}  部署完成！${NC}"
 echo -e "${GREEN}=========================================${NC}"
 
 # 获取本机 IP
-LOCAL_IP=$(hostname -I | awk '{print $1}')
+LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || ip addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1 || echo "localhost")
 
 echo ""
 echo -e "${YELLOW}访问地址：${NC}"
@@ -132,5 +139,5 @@ echo -e "  2. 请务必修改 .env 文件中的 SMTP 配置，否则邮件功能
 echo -e "  3. 如果遇到 Elasticsearch 启动失败，请尝试增加 ES_JVM_HEAP 值或检查内存。"
 echo -e "  4. 默认管理员账号请在数据库中查看或通过 API 注册 (如果开启了注册)。"
 echo ""
-echo -e "查看日志命令: cd $PROJECT_DIR && docker-compose logs -f"
-echo -e "重启服务命令: cd $PROJECT_DIR && docker-compose restart"
+echo -e "查看日志命令: cd $PROJECT_DIR/docker && $DOCKER_COMPOSE logs -f"
+echo -e "重启服务命令: cd $PROJECT_DIR/docker && $DOCKER_COMPOSE restart"
