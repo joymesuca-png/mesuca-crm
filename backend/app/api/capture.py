@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, UTC
+import random
 import json
 from app.core.database import get_db
 from app.core.database import SessionLocal
@@ -202,7 +203,7 @@ def _simulate_search_results(keyword: str, country: str, source_id: int, count: 
             "product_interest": keyword,
             "lead_score": round(_rand(40, 95) + _rand(0, 9) * 0.1, 1),
             "source_id": source_id,
-            "source_url": f"https://www.google.com/search?q={keyword}+{industry}",
+            "source_url": f"https://www.google.com/search?q={keyword}",
             "status": "new"
         })
     return results
@@ -227,5 +228,5 @@ companies = [
     "SpeedTrade", "ValuePlus", "NextGen", "ClearPath", "BrightIdea"
 ]
 
-_rand = lambda lo, hi: __import__('random').randint(lo, hi)
+_rand = lambda lo, hi: random.randint(lo, hi)
 _pick = lambda arr, i: arr[i % len(arr)]
