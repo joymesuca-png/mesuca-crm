@@ -1,7 +1,7 @@
 """外贸获客系统 - Celery 异步任务"""
 from celery import shared_task
 from datetime import datetime, UTC
-from app.core.database import SessionLocal, es_client, mongo_db
+from app.core.database import SessionLocal, get_es_client, get_mongo_db
 from app.models.lead import Lead
 import logging
 
@@ -80,6 +80,7 @@ def verify_email_task(self, email: str):
 @shared_task
 def index_lead_to_elasticsearch(lead_id: int):
     """将线索索引到 Elasticsearch"""
+    es_client = get_es_client()
     if es_client is None:
         logger.warning("Elasticsearch 未连接，跳过索引")
         return {"status": "skipped", "lead_id": lead_id}
@@ -111,6 +112,7 @@ def index_lead_to_elasticsearch(lead_id: int):
 @shared_task
 def export_leads_to_mongo(filter_criteria: dict):
     """导出线索到 MongoDB（用于数据分析）"""
+    mongo_db = get_mongo_db()
     if mongo_db is None:
         logger.warning("MongoDB 未连接，跳过导出")
         return {"status": "skipped", "count": 0}

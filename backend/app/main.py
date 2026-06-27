@@ -2,13 +2,17 @@
 外贸获客系统 - 主应用入口
 """
 import logging
+import sys
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import get_settings
-from app.core.database import engine, Base
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
@@ -56,12 +60,22 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化"""
-    logger.info("正在启动应用...")
-    # 仅开发环境自动创建表，生产环境使用 Alembic 迁移
-    if settings.DEBUG:
+    logger.info("=" * 50)
+    logger.info(f"应用启动中: {settings.APP_NAME} v1.0.0")
+    logger.info(f"数据库类型: {settings.DATABASE_TYPE}")
+
+    from app.core.database import engine, Base, DATABASE_URL
+    logger.info(f"数据库连接: {DATABASE_URL}")
+
+    try:
         from app.models import lead  # noqa: F401
         Base.metadata.create_all(bind=engine)
-        logger.info("开发模式：已自动创建数据库表")
+        logger.info("数据库表初始化完成")
+    except Exception as e:
+        logger.error(f"数据库初始化失败: {e}")
+        # 不阻止启动，允许应用运行后手动修复
+
+    logger.info("=" * 50)
 
 
 @app.on_event("shutdown")
