@@ -176,34 +176,144 @@ async def clear_tasks():
 
 # ============ 模拟数据生成 ============
 
+# 各地区数据
+_CITIES = {
+    "USA": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Miami", "Seattle", "Boston"],
+    "UK": ["London", "Manchester", "Birmingham", "Leeds", "Glasgow", "Bristol", "Liverpool"],
+    "Germany": ["Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne", "Stuttgart"],
+    "France": ["Paris", "Lyon", "Marseille", "Toulouse", "Bordeaux", "Lille"],
+    "Japan": ["Tokyo", "Osaka", "Nagoya", "Yokohama", "Kyoto", "Fukuoka"],
+    "Canada": ["Toronto", "Vancouver", "Montreal", "Calgary", "Ottawa"],
+    "Australia": ["Sydney", "Melbourne", "Brisbane", "Perth", "Adelaide"],
+    "Brazil": ["Sao Paulo", "Rio de Janeiro", "Brasilia", "Salvador"],
+    "India": ["Mumbai", "Delhi", "Bangalore", "Chennai", "Hyderabad"],
+}
+
+_FIRST_NAMES = ["James", "Sarah", "Michael", "Emma", "David", "Lisa", "Robert", "Anna",
+                "Daniel", "Sophia", "Thomas", "Olivia", "William", "Emily", "Kevin", "Grace",
+                "Ryan", "Linda", "Jason", "Jessica", "Brian", "Amanda", "Chris", "Nancy"]
+
+_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Wilson", "Taylor",
+               "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson",
+               "Garcia", "Martinez", "Robinson", "Clark", "Lewis", "Lee", "Walker", "Hall"]
+
+# 公司后缀，按国家匹配
+_CO_SUFFIX = {
+    "USA": ["Inc.", "LLC", "Corp.", "Ltd.", "Group"],
+    "UK": ["Ltd.", "PLC", "Group", "Holdings", "International"],
+    "Germany": ["GmbH", "AG", "KG", "Group", "International"],
+    "France": ["SARL", "SAS", "SA", "Group", "International"],
+    "Japan": ["Co., Ltd.", "KK", "Corp.", "Group", "International"],
+    "default": ["Co., Ltd.", "Group", "International", "Trading", "Corp."]
+}
+
+# 行业关键词映射
+_INDUSTRY_MAP = {
+    "light": "Lighting & Electrical",
+    "led": "Lighting & Electrical",
+    "lamp": "Lighting & Electrical",
+    "auto": "Auto Parts & Accessories",
+    "car": "Auto Parts & Accessories",
+    "toy": "Toys & Hobbies",
+    "toki": "Toys & Hobbies",
+    "doll": "Toys & Hobbies",
+    "figure": "Toys & Hobbies",
+    "fashion": "Apparel & Fashion",
+    "clothing": "Apparel & Fashion",
+    "garment": "Apparel & Fashion",
+    "bag": "Bags & Luggage",
+    "shoe": "Footwear",
+    "electronic": "Consumer Electronics",
+    "phone": "Consumer Electronics",
+    "computer": "IT & Technology",
+    "software": "IT & Technology",
+    "machine": "Industrial Machinery",
+    "tool": "Hardware & Tools",
+    "furniture": "Furniture & Home",
+    "home": "Home & Garden",
+    "kitchen": "Kitchen & Dining",
+    "food": "Food & Beverage",
+    "drink": "Food & Beverage",
+    "medical": "Medical Devices",
+    "health": "Health & Beauty",
+    "beauty": "Health & Beauty",
+    "cosmetic": "Health & Beauty",
+    "sport": "Sports & Outdoors",
+    "fitness": "Sports & Outdoors",
+    "chemical": "Chemicals & Materials",
+    "plastic": "Plastics & Rubber",
+    "metal": "Metals & Mining",
+    "steel": "Metals & Mining",
+    "textile": "Textiles & Fabrics",
+    "fabric": "Textiles & Fabrics",
+    "paper": "Packaging & Printing",
+    "pack": "Packaging & Printing",
+    "solar": "Renewable Energy",
+    "energy": "Renewable Energy",
+    "default": "General Trade",
+}
+
+
+def _guess_industry(keyword: str) -> str:
+    """根据关键词推测行业"""
+    kw = keyword.lower()
+    for key, industry in _INDUSTRY_MAP.items():
+        if key in kw:
+            return industry
+    return _INDUSTRY_MAP["default"]
+
+
+def _gen_company_name(keyword: str, i: int) -> str:
+    """根据关键词生成相关的公司名"""
+    kw = keyword.strip().title()
+    # 多种命名模式，随机选取
+    patterns = [
+        f"{kw} {_random_pick(['International', 'Group', 'Trading', 'Industries', 'Products', 'Solutions', 'Hub', 'Zone', 'World', 'Direct', 'Express', 'Pro', 'Elite', 'Premium', 'Global', 'Supply', 'Link', 'Plus', 'Max', 'Star'])}",
+        f"{_random_pick(['Best', 'Prime', 'Apex', 'Nova', 'Ultra', 'Mega', 'Top', 'First', 'Royal', 'Sunrise', 'Pacific', 'Atlantic', 'Golden', 'Silver', 'Diamond', 'Crystal', 'Bright', 'Smart', 'Eco', 'True'])} {kw}",
+        f"{kw} {_random_pick(['Source', 'Line', 'Net', 'Way', 'Port', 'Trade', 'Mart', 'Expo'])}",
+        f"{_random_pick(['New', 'Modern', 'Advanced', 'Creative', 'Dynamic', 'United', 'Superior', 'Innovative'])} {kw}",
+        f"{kw} {_random_pick(['Manufacturing', 'Trading', 'Import & Export', 'Distribution', 'Supply Chain'])}",
+    ]
+    return f"{random.choice(patterns)} {_random_pick(_CO_SUFFIX.get('default', _CO_SUFFIX['default']), i)}"
+
+
+def _random_pick(arr: list, i: int = 0) -> str:
+    """随机选取数组元素"""
+    return arr[random.randint(0, len(arr) - 1)]
+
+
 def _simulate_search_results(keyword: str, country: str, source_id: int, count: int) -> list:
-    """模拟搜索引擎采集结果"""
-    industries = ["Electronics", "Home & Garden", "Fashion", "Auto Parts", "Machinery"]
-    countries = [country] if country else ["USA", "UK", "Germany", "France", "Japan"]
-    first_names = ["James", "Sarah", "Michael", "Emma", "David", "Lisa", "Robert", "Anna"]
-    last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Wilson", "Taylor", "Anderson"]
+    """模拟搜索引擎采集结果 — 公司名和行业匹配关键词"""
+    countries = [country] if country else list(_CITIES.keys())
+    industry = _guess_industry(keyword)
+    # 每次运行使用不同的随机种子，确保重复采集不重复
+    batch_id = datetime.now(UTC).strftime("%m%d%H%M") + str(random.randint(100, 999))
     
     results = []
-    for i in range(min(count, len(companies))):
-        # 模拟重名检测
-        contact = f"{_pick(first_names, i)} {_pick(last_names, i)}"
-        company = _pick(companies, i)
-        coin = ["ltd", "inc", "corp", "llc"] if country and country.lower() == "usa" else ["Co., Ltd.", "Group", "International", "Trading"]
-        comp_name = f"{company} {_pick(coin, i)}"
+    for i in range(count):
+        c = random.choice(countries)
+        comp_name = _gen_company_name(keyword, i)
+        first = random.choice(_FIRST_NAMES)
+        last = random.choice(_LAST_NAMES)
+        contact = f"{first} {last}"
+        # 用关键词 + 批次ID + 序号 生成唯一邮箱，确保每次采集不重复
+        email_slug = keyword.lower().replace(" ", "")[:10]
+        domain = comp_name.lower().split()[0]
+        email = f"{first.lower()}.{last.lower()}.{email_slug}{batch_id}.{i}@{domain}.com"
         
         results.append({
             "company_name": comp_name,
             "contact_name": contact,
-            "email": f"{contact.lower().replace(' ', '.')}@{company.lower().replace(' ', '')}.com",
-            "phone": f"+1-{_rand(200, 999)}-{_rand(1000, 9999)}",
-            "website": f"https://www.{company.lower().replace(' ', '')}.com",
-            "country": _pick(countries, i),
-            "city": _pick(["New York", "London", "Berlin", "Paris", "Tokyo", "Los Angeles", "Chicago", "Houston"], i),
-            "industry": _pick(industries, i),
+            "email": email,
+            "phone": f"+1-{random.randint(200, 999)}-{random.randint(1000, 9999)}",
+            "website": f"https://www.{domain}.com",
+            "country": c,
+            "city": random.choice(_CITIES.get(c, ["City"])),
+            "industry": industry,
             "product_interest": keyword,
-            "lead_score": round(_rand(40, 95) + _rand(0, 9) * 0.1, 1),
+            "lead_score": round(random.randint(40, 95) + random.randint(0, 9) * 0.1, 1),
             "source_id": source_id,
-            "source_url": f"https://www.google.com/search?q={keyword}",
+            "source_url": f"https://www.google.com/search?q={keyword}+{industry}",
             "status": "new"
         })
     return results
@@ -211,22 +321,8 @@ def _simulate_search_results(keyword: str, country: str, source_id: int, count: 
 
 def _simulate_b2b_results(platform: str, keyword: str, source_id: int, count: int) -> list:
     """模拟 B2B 平台采集结果"""
-    results = _simulate_search_results(keyword, None, source_id, count)
+    results = _simulate_search_results(keyword, "default", source_id, count)
     for r in results:
         r["source_url"] = f"https://www.{platform}.com/search?q={keyword}"
-        r["lead_score"] = round(_rand(50, 90) + _rand(0, 9) * 0.1, 1)
+        r["lead_score"] = round(random.randint(50, 90) + random.randint(0, 9) * 0.1, 1)
     return results
-
-
-# 预置数据
-companies = [
-    "TechVision", "GlobalTrade", "Sunrise", "OceanBridge", "SmartHome",
-    "EuroParts", "GreenLight", "BlueOcean", "StarLink", "PowerMax",
-    "EcoProducts", "MegaDeal", "PrimeSource", "FirstChoice", "TopGear",
-    "AlphaTech", "BestSupply", "QuickShip", "GoldStar", "NewWave",
-    "DirectLink", "ProMarket", "SkyHigh", "WorldClass", "UltraGoods",
-    "SpeedTrade", "ValuePlus", "NextGen", "ClearPath", "BrightIdea"
-]
-
-_rand = lambda lo, hi: random.randint(lo, hi)
-_pick = lambda arr, i: arr[i % len(arr)]
