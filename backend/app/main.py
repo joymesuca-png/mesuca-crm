@@ -102,5 +102,6 @@ async def health_check():
 
 
 # 导入并注册路由
-from app.api import leads
+from app.api import leads, capture
 app.include_router(leads.router, prefix=f"{settings.API_V1_PREFIX}/leads", tags=["leads"])
+app.include_router(capture.router, prefix=f"{settings.API_V1_PREFIX}/capture", tags=["capture"])

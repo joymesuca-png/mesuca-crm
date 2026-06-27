@@ -15,6 +15,9 @@
         <el-menu-item index="/leads">
           <el-icon><List /></el-icon> 客户线索
         </el-menu-item>
+        <el-menu-item index="/capture">
+          <el-icon><Promotion /></el-icon> 获客采集
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -44,12 +47,13 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { HomeFilled, List, UserFilled, ArrowDown } from '@element-plus/icons-vue'
+import { HomeFilled, List, UserFilled, ArrowDown, Promotion } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 
 const activeMenu = computed(() => {
+  if (route.path.startsWith('/capture')) return '/capture'
   if (route.path.startsWith('/leads')) return '/leads'
   return '/'
 })

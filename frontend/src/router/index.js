@@ -27,6 +27,12 @@ const routes = [
         name: 'LeadDetail',
         component: () => import('../views/LeadDetail.vue'),
         meta: { title: '线索详情' }
+      },
+      {
+        path: 'capture',
+        name: 'Capture',
+        component: () => import('../views/Capture.vue'),
+        meta: { title: '获客采集' }
       }
     ]
   }

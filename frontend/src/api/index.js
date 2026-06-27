@@ -36,4 +36,11 @@ export const createLead = (data) => api.post('/leads/', data)
 export const updateLead = (id, data) => api.put(`/leads/${id}`, data)
 export const deleteLead = (id) => api.delete(`/leads/${id}`)
 
+// 获客采集
+export const getCaptureStats = () => api.get('/capture/stats')
+export const getCaptureTasks = () => api.get('/capture/tasks')
+export const startSearchCapture = (data) => api.post('/capture/search', data)
+export const startB2BCapture = (data) => api.post('/capture/b2b', data)
+export const clearCaptureTasks = () => api.delete('/capture/tasks')
+
 export default api
