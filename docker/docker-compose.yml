@@ -69,7 +69,7 @@ services:
   # Backend API
   backend:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile
     container_name: lead_capture_backend
     ports:
@@ -91,13 +91,13 @@ services:
       elasticsearch:
         condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ../backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Celery Worker
   celery_worker:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile
     container_name: lead_capture_celery_worker
     environment:
@@ -112,7 +112,7 @@ services:
       - redis
       - postgres
     volumes:
-      - ./backend:/app
+      - ../backend:/app
     command: celery -A app.core.celery_app worker --loglevel=info
 
 volumes:
