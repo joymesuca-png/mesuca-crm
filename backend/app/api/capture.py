@@ -1,10 +1,12 @@
 """
 外贸获客系统 - 获客采集 API 路由
 
-真实采集引擎：Google/Bing 搜索、B2B 平台、公司网站深度挖掘
-网络不可用时自动降级为模拟数据，确保服务可用。
+核心原则：真实采集必须返回真实数据。
+- 网络不可用 / 被反爬拦截 → 任务标记为 failed，明确告知原因
+- 部分成功（数量不足）→ 任务标记为 partial，保存已有数据并提示
+- 模拟数据仅在用户显式开启 simulate=true 时生成（用于测试/演示）
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
@@ -27,6 +29,7 @@ class SearchCaptureRequest(BaseModel):
     country: Optional[str] = Field(None, max_length=100, description="目标国家")
     max_results: int = Field(20, ge=1, le=100, description="最大采集数量")
     deep_mine: bool = Field(False, description="是否深度挖掘公司网站获取邮箱/电话")
+    simulate: bool = Field(False, description="（仅测试）显式使用模拟数据，不进行真实采集")
 
 
 class B2BCaptureRequest(BaseModel):
@@ -35,6 +38,7 @@ class B2BCaptureRequest(BaseModel):
     keyword: str = Field(..., min_length=1, description="搜索关键词")
     source_id: int = Field(..., description="线索来源 ID")
     max_results: int = Field(20, ge=1, le=100)
+    simulate: bool = Field(False, description="（仅测试）显式使用模拟数据，不进行真实采集")
 
 
 class CaptureTaskResponse(BaseModel):
@@ -43,10 +47,12 @@ class CaptureTaskResponse(BaseModel):
     type: str
     keyword: str
     platform: Optional[str] = None
-    status: str
+    status: str  # running / completed / partial / failed
     created_at: str
     message: str
     real_data: bool = False
+    new_leads: int = 0
+    total_collected: int = 0
 
 
 class CaptureStatsResponse(BaseModel):
@@ -54,6 +60,7 @@ class CaptureStatsResponse(BaseModel):
     total_tasks: int
     running_tasks: int
     completed_tasks: int
+    partial_tasks: int
     failed_tasks: int
     total_leads_today: int
     recent_tasks: List[CaptureTaskResponse]
@@ -74,6 +81,8 @@ def _add_task(task_type: str, keyword: str, platform: str = None) -> dict:
         "created_at": datetime.now(UTC).isoformat(),
         "message": "正在采集真实数据...",
         "real_data": False,
+        "new_leads": 0,
+        "total_collected": 0,
     }
     _task_store.append(task)
     return task
@@ -85,7 +94,6 @@ def _save_leads(leads_data: List[dict], source_id: int) -> int:
         return 0
     saved = 0
     db = SessionLocal()
-    # Lead 模型的有效字段
     _valid_fields = {
         "company_name", "contact_name", "email", "phone", "website",
         "country", "state", "city", "address", "industry",
@@ -95,15 +103,13 @@ def _save_leads(leads_data: List[dict], source_id: int) -> int:
     try:
         for data in leads_data:
             data["source_id"] = source_id
-            # 将 social_links 合并到 original_data（JSON 存储）
             if data.get("social_links"):
                 import json
                 social_json = json.dumps(data["social_links"], ensure_ascii=False)
                 existing = data.get("original_data", "") or ""
                 data["original_data"] = (existing + f" | social: {social_json}").strip(" | ")
-            # 过滤掉不在模型中的字段
             clean_data = {k: v for k, v in data.items() if k in _valid_fields}
-            # 去重：按邮箱，如果没邮箱则按公司名+网站
+
             if clean_data.get("email"):
                 exists = db.query(Lead).filter(Lead.email == clean_data["email"]).first()
             elif clean_data.get("company_name") and clean_data.get("website"):
@@ -134,16 +140,30 @@ async def get_capture_stats():
     """获取采集任务统计"""
     running = sum(1 for t in _task_store if t["status"] == "running")
     completed = sum(1 for t in _task_store if t["status"] == "completed")
+    partial = sum(1 for t in _task_store if t["status"] == "partial")
     failed = sum(1 for t in _task_store if t["status"] == "failed")
 
     return CaptureStatsResponse(
         total_tasks=len(_task_store),
         running_tasks=running,
         completed_tasks=completed,
+        partial_tasks=partial,
         failed_tasks=failed,
         total_leads_today=0,
         recent_tasks=[CaptureTaskResponse(**t) for t in _task_store[-10:]]
     )
+
+
+# ── 反爬限制常量 ──
+_DEEP_MINE_MAX = 10     # 深度挖掘时最多采集 10 条（避免触发反爬）
+_NORMAL_MAX = 30         # 普通采集单次最多 30 条
+_ANTI_SCRAPE_TIPS = [
+    "请尝试缩小采集数量（建议 ≤ 10 条），避免触发反爬机制",
+    "请尝试添加目标国家筛选，缩小搜索范围",
+    "请尝试使用更具体的关键词（如 'LED bulb manufacturer' 替代 'LED'）",
+    "请等待 1-2 分钟后重试，避免频繁请求被封锁",
+    "深度挖掘已开启时会自动限制采集数量 ≤ 10 条",
+]
 
 
 @router.post("/search", response_model=CaptureTaskResponse)
@@ -151,49 +171,85 @@ async def start_search_capture(
     req: SearchCaptureRequest,
     db: Session = Depends(get_db)
 ):
-    """启动搜索引擎采集任务（真实采集 + 模拟降级）"""
+    """启动搜索引擎采集任务。
+
+    核心规则：
+    - 默认只进行真实采集，不生成任何模拟数据
+    - 被反爬 / 无结果时返回明确失败原因
+    - 部分结果也会保存，但标记为 partial 状态
+    - 仅当 simulate=true 时使用模拟数据（测试/演示用）
+    """
     source = db.query(LeadSource).filter(LeadSource.id == req.source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="线索来源不存在")
 
+    # ── 反爬限制：深度挖掘时自动限制采集数量 ──
+    effective_max = req.max_results
+    if req.deep_mine and effective_max > _DEEP_MINE_MAX:
+        effective_max = _DEEP_MINE_MAX
+        logger.info(f"深度挖掘已开启，采集数量自动限制为 {effective_max} 条")
+    elif not req.deep_mine and effective_max > _NORMAL_MAX:
+        effective_max = _NORMAL_MAX
+
     task = _add_task("search", req.keyword)
-    leads_data = []
-    real_data = False
 
-    # ── 尝试真实采集 ──
-    try:
-        from app.services.scraper import collect_search_engine, enrich_lead_with_website
-        leads_data = collect_search_engine(req.keyword, req.country, req.max_results)
-        if leads_data and len(leads_data) >= 3:
-            real_data = True
-            # 深度挖掘：访问公司网站提取邮箱电话
-            if req.deep_mine:
-                logger.info("开始深度挖掘公司网站...")
-                for i, lead in enumerate(leads_data[:10]):  # 最多挖10个网站
-                    leads_data[i] = enrich_lead_with_website(lead)
-    except Exception as e:
-        logger.warning(f"真实采集失败，降级为模拟数据: {e}")
-
-    # ── 降级：模拟数据 ──
-    if not leads_data or len(leads_data) < 3:
+    # ── 显式模拟数据模式 ──
+    if req.simulate:
+        task["real_data"] = False
         from app.services.simulator import simulate_search_results
         leads_data = simulate_search_results(req.keyword, req.country, req.source_id, req.max_results)
-        task["real_data"] = False
-        task["message"] = f"网络采集受限，已生成 {len(leads_data)} 条模拟线索（{req.keyword} 行业）"
-    else:
-        task["real_data"] = real_data
-
-    # ── 保存到数据库 ──
-    try:
         saved = _save_leads(leads_data, req.source_id)
-        if real_data:
-            task["message"] = f"真实采集完成！共获取 {len(leads_data)} 条线索，新增 {saved} 条"
-        else:
-            task["message"] = f"采集完成！共获取 {len(leads_data)} 条线索，新增 {saved} 条"
         task["status"] = "completed"
+        task["message"] = f"[模拟数据] 已生成 {len(leads_data)} 条测试线索，新增 {saved} 条（仅供测试，非真实客户）"
+        task["new_leads"] = saved
+        task["total_collected"] = len(leads_data)
+        return CaptureTaskResponse(**task)
+
+    # ── 真实采集 ──
+    leads_data = []
+    error_reason = None
+
+    try:
+        from app.services.scraper import collect_search_engine, enrich_lead_with_website
+        leads_data = collect_search_engine(req.keyword, req.country, effective_max)
+        task["real_data"] = True
+
+        if leads_data and req.deep_mine:
+            logger.info(f"开始深度挖掘 {min(len(leads_data), _DEEP_MINE_MAX)} 个公司网站...")
+            for i, lead in enumerate(leads_data[:_DEEP_MINE_MAX]):
+                leads_data[i] = enrich_lead_with_website(lead)
     except Exception as e:
+        error_reason = f"采集引擎异常: {str(e)}"
+        logger.error(error_reason)
+
+    # ── 结果判定 ──
+    if leads_data and len(leads_data) >= 3:
+        # 足够的结果
+        saved = _save_leads(leads_data, req.source_id)
+        task["status"] = "completed"
+        task["message"] = f"真实采集完成！共获取 {len(leads_data)} 条线索，新增 {saved} 条"
+        task["new_leads"] = saved
+        task["total_collected"] = len(leads_data)
+    elif leads_data and len(leads_data) > 0:
+        # 部分结果（数量不足，但保存已有的）
+        saved = _save_leads(leads_data, req.source_id)
+        task["status"] = "partial"
+        task["message"] = (
+            f"部分成功：仅获取到 {len(leads_data)} 条真实线索（新增 {saved} 条）。"
+            f"建议：{_ANTI_SCRAPE_TIPS[0]}"
+        )
+        task["new_leads"] = saved
+        task["total_collected"] = len(leads_data)
+    else:
+        # 无结果
+        reason = error_reason or "搜索引擎未返回有效结果，可能被反爬机制拦截"
         task["status"] = "failed"
-        task["message"] = f"保存失败：{str(e)}"
+        task["message"] = (
+            f"采集失败：{reason}。"
+            f"建议：{_ANTI_SCRAPE_TIPS[1]}；{_ANTI_SCRAPE_TIPS[2]}"
+        )
+        task["new_leads"] = 0
+        task["total_collected"] = 0
 
     return CaptureTaskResponse(**task)
 
@@ -203,38 +259,65 @@ async def start_b2b_capture(
     req: B2BCaptureRequest,
     db: Session = Depends(get_db)
 ):
-    """启动 B2B 平台采集任务"""
+    """启动 B2B 平台采集任务。
+
+    核心规则同搜索引擎采集。
+    """
     source = db.query(LeadSource).filter(LeadSource.id == req.source_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="线索来源不存在")
 
+    effective_max = min(req.max_results, _NORMAL_MAX)
     task = _add_task("b2b", req.keyword, req.platform)
+
+    # ── 显式模拟数据模式 ──
+    if req.simulate:
+        task["real_data"] = False
+        from app.services.simulator import simulate_b2b_results
+        leads_data = simulate_b2b_results(req.platform, req.keyword, req.source_id, req.max_results)
+        saved = _save_leads(leads_data, req.source_id)
+        task["status"] = "completed"
+        task["message"] = f"[模拟数据] 已生成 {len(leads_data)} 条测试线索，新增 {saved} 条（仅供测试，非真实客户）"
+        task["new_leads"] = saved
+        task["total_collected"] = len(leads_data)
+        return CaptureTaskResponse(**task)
+
+    # ── 真实采集 ──
     leads_data = []
-    real_data = False
+    error_reason = None
 
     try:
         from app.services.scraper import collect_b2b
-        leads_data = collect_b2b(req.platform, req.keyword, req.max_results)
-        if leads_data and len(leads_data) >= 2:
-            real_data = True
+        leads_data = collect_b2b(req.platform, req.keyword, effective_max)
+        task["real_data"] = True
     except Exception as e:
-        logger.warning(f"B2B 真实采集失败: {e}")
+        error_reason = f"B2B 采集异常: {str(e)}"
+        logger.error(error_reason)
 
-    if not leads_data or len(leads_data) < 2:
-        from app.services.simulator import simulate_b2b_results
-        leads_data = simulate_b2b_results(req.platform, req.keyword, req.source_id, req.max_results)
-        task["real_data"] = False
-
-    try:
+    if leads_data and len(leads_data) >= 2:
         saved = _save_leads(leads_data, req.source_id)
-        if real_data:
-            task["message"] = f"B2B 真实采集完成！共获取 {len(leads_data)} 条，新增 {saved} 条"
-        else:
-            task["message"] = f"B2B 采集完成！共获取 {len(leads_data)} 条，新增 {saved} 条"
         task["status"] = "completed"
-    except Exception as e:
+        task["message"] = f"B2B 真实采集完成！共获取 {len(leads_data)} 条，新增 {saved} 条"
+        task["new_leads"] = saved
+        task["total_collected"] = len(leads_data)
+    elif leads_data and len(leads_data) > 0:
+        saved = _save_leads(leads_data, req.source_id)
+        task["status"] = "partial"
+        task["message"] = (
+            f"部分成功：仅获取到 {len(leads_data)} 条真实线索（新增 {saved} 条）。"
+            f"建议：尝试更换平台或使用更具体的关键词"
+        )
+        task["new_leads"] = saved
+        task["total_collected"] = len(leads_data)
+    else:
+        reason = error_reason or f"平台 {req.platform} 未返回有效结果，可能被反爬机制拦截"
         task["status"] = "failed"
-        task["message"] = f"保存失败：{str(e)}"
+        task["message"] = (
+            f"采集失败：{reason}。"
+            f"建议：尝试更换平台（如阿里巴巴国际站），或使用更具体的关键词"
+        )
+        task["new_leads"] = 0
+        task["total_collected"] = 0
 
     return CaptureTaskResponse(**task)
 

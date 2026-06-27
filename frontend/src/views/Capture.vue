@@ -7,6 +7,22 @@
       </el-button>
     </div>
 
+    <!-- 反爬提示 -->
+    <el-alert
+      title="采集说明"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom:16px"
+    >
+      <template #default>
+        <p style="margin:0;line-height:1.8">
+          系统仅采集真实数据，不自动生成模拟线索。
+          深度挖掘时自动限制单次 ≤ 10 条，普通采集单次 ≤ 30 条，以规避反爬机制。
+        </p>
+      </template>
+    </el-alert>
+
     <!-- 统计卡片 -->
     <el-row :gutter="16" style="margin-bottom:20px">
       <el-col :span="6" v-for="card in statCards" :key="card.label">
@@ -29,7 +45,7 @@
           <div class="channel-icon"><el-icon :size="36"><Search /></el-icon></div>
           <h3>搜索引擎采集</h3>
           <p>通过 Google 等搜索引擎按关键词挖掘潜在客户</p>
-          <el-tag type="info" size="small">Google · Bing · DuckDuckGo</el-tag>
+          <el-tag type="info" size="small">Google · Bing · Yellow Pages</el-tag>
         </el-card>
       </el-col>
       <el-col :span="12">
@@ -37,7 +53,7 @@
           <div class="channel-icon"><el-icon :size="36"><Connection /></el-icon></div>
           <h3>B2B 平台采集</h3>
           <p>从阿里巴巴国际站等 B2B 平台获取采购商信息</p>
-          <el-tag type="warning" size="small">Alibaba · Global Sources · Made-in-China</el-tag>
+          <el-tag type="warning" size="small">Alibaba · Made-in-China</el-tag>
         </el-card>
       </el-col>
     </el-row>
@@ -87,7 +103,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="keyword" label="关键词" min-width="150" />
+        <el-table-column prop="keyword" label="关键词" min-width="140" />
         <el-table-column prop="platform" label="平台" width="120">
           <template #default="{ row }">{{ row.platform || '-' }}</template>
         </el-table-column>
@@ -96,27 +112,29 @@
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="real_data" label="数据源" width="100">
+        <el-table-column label="结果" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.real_data ? 'success' : 'warning'" size="small">
-              {{ row.real_data ? '真实采集' : '模拟数据' }}
-            </el-tag>
+            <span v-if="row.status === 'completed' || row.status === 'partial'">
+              <span style="color:#67c23a">{{ row.new_leads }}</span>
+              <span style="color:#909399"> / {{ row.total_collected }} 条</span>
+            </span>
+            <span v-else style="color:#909399">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="message" label="结果" min-width="200" />
-        <el-table-column prop="created_at" label="时间" width="180">
+        <el-table-column prop="message" label="详情" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="created_at" label="时间" width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
       </el-table>
     </el-card>
 
     <!-- 新建采集弹窗 -->
-    <el-dialog v-model="showTaskDialog" :title="taskDialogTitle" width="520px" @closed="resetForm">
+    <el-dialog v-model="showTaskDialog" :title="taskDialogTitle" width="560px" @closed="resetForm">
       <el-tabs v-model="activeTab" @tab-change="onTabChange">
         <el-tab-pane label="搜索引擎" name="search">
           <el-form :model="searchForm" :rules="searchRules" ref="searchFormRef" label-width="100px">
             <el-form-item label="关键词" prop="keyword">
-              <el-input v-model="searchForm.keyword" placeholder="例如：LED lighting, auto parts（支持中英文）" />
+              <el-input v-model="searchForm.keyword" placeholder="例如：LED bulb manufacturer, auto parts" />
             </el-form-item>
             <el-form-item label="目标国家" prop="country">
               <el-select v-model="searchForm.country" placeholder="不限" clearable filterable style="width:100%">
@@ -138,12 +156,22 @@
               </el-select>
             </el-form-item>
             <el-form-item label="采集数量">
-              <el-input-number v-model="searchForm.max_results" :min="1" :max="100" style="width:100%" />
+              <el-input-number v-model="searchForm.max_results" :min="1" :max="maxAllowed" style="width:100%" />
+              <div style="font-size:12px;color:#909399;margin-top:2px">
+                {{ searchForm.deep_mine ? '深度挖掘模式单次最多 10 条' : '单次最多 30 条，避免触发反爬' }}
+              </div>
             </el-form-item>
             <el-form-item label="深度挖掘">
               <el-switch v-model="searchForm.deep_mine" active-text="访问公司网站提取邮箱/电话" />
-              <div style="font-size:12px;color:#909399;margin-top:4px">
-                开启后会逐个访问搜索结果中的公司网站，提取联系邮箱和电话，采集速度较慢但信息更准确
+              <div style="font-size:12px;color:#e6a23c;margin-top:4px">
+                {{ searchForm.deep_mine ? '已开启：采集速度较慢，自动限制 10 条以内' : '关闭：仅从搜索结果提取信息，速度较快' }}
+              </div>
+            </el-form-item>
+            <el-divider style="margin:8px 0" />
+            <el-form-item label="测试模式">
+              <el-switch v-model="searchForm.simulate" active-text="生成模拟数据（仅供测试）" inactive-text="真实采集" />
+              <div style="font-size:12px;color:#f56c6c;margin-top:4px">
+                开启后将使用模拟数据而非真实采集，仅用于功能测试
               </div>
             </el-form-item>
           </el-form>
@@ -167,7 +195,12 @@
               </el-select>
             </el-form-item>
             <el-form-item label="采集数量">
-              <el-input-number v-model="b2bForm.max_results" :min="1" :max="100" style="width:100%" />
+              <el-input-number v-model="b2bForm.max_results" :min="1" :max="30" style="width:100%" />
+              <div style="font-size:12px;color:#909399;margin-top:2px">单次最多 30 条</div>
+            </el-form-item>
+            <el-divider style="margin:8px 0" />
+            <el-form-item label="测试模式">
+              <el-switch v-model="b2bForm.simulate" active-text="生成模拟数据（仅供测试）" />
             </el-form-item>
           </el-form>
         </el-tab-pane>
@@ -185,24 +218,24 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, Connection, Location, Share, Ship, VideoPlay, DataLine, TrendCharts, Link, Finished } from '@element-plus/icons-vue'
+import { Plus, Search, Connection, Location, Share, Ship, VideoPlay, DataLine, TrendCharts, Link, Finished, Warning } from '@element-plus/icons-vue'
 import { getCaptureStats, getCaptureTasks, startSearchCapture, startB2BCapture, clearCaptureTasks, getSources } from '../api'
 
 const loading = ref(false)
 const capturing = ref(false)
 const tasks = ref([])
-const stats = ref({ total_tasks: 0, running_tasks: 0, completed_tasks: 0, failed_tasks: 0, total_leads_today: 0 })
+const stats = ref({ total_tasks: 0, running_tasks: 0, completed_tasks: 0, partial_tasks: 0, failed_tasks: 0, total_leads_today: 0 })
 const sources = ref([])
 
 const statCards = computed(() => [
   { icon: DataLine, label: '总任务数', value: stats.value.total_tasks, color: '#409eff' },
   { icon: TrendCharts, label: '运行中', value: stats.value.running_tasks, color: '#e6a23c' },
   { icon: Finished, label: '已完成', value: stats.value.completed_tasks, color: '#67c23a' },
-  { icon: Link, label: '今日线索', value: stats.value.total_leads_today, color: '#f56c6c' }
+  { icon: Warning, label: '部分/失败', value: (stats.value.partial_tasks || 0) + (stats.value.failed_tasks || 0), color: '#f56c6c' }
 ])
 
-const statusType = (s) => ({ running: 'warning', completed: 'success', failed: 'danger' }[s] || 'info')
-const statusLabel = (s) => ({ running: '采集中', completed: '已完成', failed: '失败' }[s] || s)
+const statusType = (s) => ({ running: 'warning', completed: 'success', partial: 'warning', failed: 'danger' }[s] || 'info')
+const statusLabel = (s) => ({ running: '采集中', completed: '已完成', partial: '部分成功', failed: '失败' }[s] || s)
 const formatTime = (t) => t ? new Date(t).toLocaleString('zh-CN') : '-'
 
 // 任务弹窗
@@ -210,12 +243,12 @@ const showTaskDialog = ref(false)
 const activeTab = ref('search')
 const taskDialogTitle = computed(() => activeTab.value === 'search' ? '搜索引擎采集' : 'B2B 平台采集')
 
-const searchForm = reactive({ keyword: '', country: '', source_id: null, max_results: 20, deep_mine: false })
+const searchForm = reactive({ keyword: '', country: '', source_id: null, max_results: 20, deep_mine: false, simulate: false })
 const searchRules = {
   keyword: [{ required: true, message: '请输入搜索关键词', trigger: 'blur' }],
   source_id: [{ required: true, message: '请选择线索来源', trigger: 'change' }]
 }
-const b2bForm = reactive({ platform: '', keyword: '', source_id: null, max_results: 20 })
+const b2bForm = reactive({ platform: '', keyword: '', source_id: null, max_results: 20, simulate: false })
 const b2bRules = {
   platform: [{ required: true, message: '请选择平台', trigger: 'change' }],
   keyword: [{ required: true, message: '请输入关键词', trigger: 'blur' }],
@@ -223,6 +256,8 @@ const b2bRules = {
 }
 const searchFormRef = ref(null)
 const b2bFormRef = ref(null)
+
+const maxAllowed = computed(() => searchForm.deep_mine ? 10 : 30)
 
 const openSearchCapture = () => {
   activeTab.value = 'search'
@@ -240,23 +275,35 @@ const onTabChange = () => { /* 切换 tab 时重置校验 */ }
 const resetForm = () => {
   searchFormRef.value?.resetFields()
   searchForm.deep_mine = false
+  searchForm.simulate = false
   b2bFormRef.value?.resetFields()
+  b2bForm.simulate = false
 }
 
 const startCapture = async () => {
-  const refName = activeTab.value === 'search' ? 'searchFormRef' : 'b2bFormRef'
   const formRef = activeTab.value === 'search' ? searchFormRef : b2bFormRef
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
 
   capturing.value = true
   try {
+    let res
     if (activeTab.value === 'search') {
-      const res = await startSearchCapture({ ...searchForm })
-      ElMessage.success(res.data.message)
+      res = await startSearchCapture({ ...searchForm })
     } else {
-      const res = await startB2BCapture({ ...b2bForm })
-      ElMessage.success(res.data.message)
+      res = await startB2BCapture({ ...b2bForm })
+    }
+    const d = res.data
+    if (d.status === 'completed') {
+      if (d.real_data) {
+        ElMessage.success(`采集完成！新增 ${d.new_leads} 条真实线索`)
+      } else {
+        ElMessage.warning(`模拟数据已生成 ${d.new_leads} 条（仅供测试）`)
+      }
+    } else if (d.status === 'partial') {
+      ElMessage.warning(`部分成功：仅获取到 ${d.total_collected} 条，新增 ${d.new_leads} 条`)
+    } else {
+      ElMessage.error(d.message)
     }
     showTaskDialog.value = false
     fetchData()
