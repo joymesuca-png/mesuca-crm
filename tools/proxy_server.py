@@ -132,7 +132,8 @@ async def relay_via_proxy(
             )
 
             if b"200" not in upstream_resp.split(b"\r\n")[0]:
-                logger.warning(f"上游代理拒绝 CONNECT: {upstream_resp.split(b'\r\n')[0].decode()}")
+                resp_line = upstream_resp.split(b"\r\n")[0].decode()
+                logger.warning(f"上游代理拒绝 CONNECT: {resp_line}")
                 client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                 await client_writer.drain()
                 client_writer.close()
